@@ -1,29 +1,54 @@
 # COT Multi-Asset Bias Analyzer + AI Review
 
-Tool a riga di comando che scarica i dati COT Legacy (Futures Only) da
-Tradingster.com per **19 strumenti** (8 valute + 11 asset tra crypto, indice
-e commodities), estrae il posizionamento Non-Commercial e produce un report
-completo con valutazione AI dei 3 setup più puliti.
+A command-line tool that scrapes COT Legacy (Futures Only) data from
+Tradingster.com for **19 instruments** (8 currencies + 11 single assets
+across crypto, indices and commodities), pulls **historical z-scores** from
+the official CFTC API, and produces a full positioning report with an
+optional AI review of the 3 cleanest setups.
 
-## Strumenti monitorati
+## Tracked instruments
 
-| Categoria | Asset |
+| Category | Assets |
 |---|---|
 | **Forex** | AUD, GBP, CAD, EUR, JPY, CHF, NZD, USD Index |
 | **Crypto** | Bitcoin, Ether (cash settled) |
-| **Indice** | S&P 500 Consolidated |
+| **Index** | S&P 500 Consolidated |
 | **Commodities** | Crude Oil WTI, Natural Gas, Gold, Silver, Copper, Palladium, Platinum, Aluminum MWP |
 
-## Setup con conda
+## What it does
 
-### 1. Crea l'environment
+For every instrument the tool extracts **Non-Commercial** (speculator) data
+only and computes three independent signals:
+
+- **NET = Long − Short** → current positioning (long-term bias)
+- **ΔNET = ΔLong − ΔShort** → weekly change (short-term momentum)
+- **z(26w)** → z-score of current net vs the prior 26-week distribution
+  (from the official CFTC Public Reporting API)
+
+The z-score is the key innovation: an absolute net of +170k contracts means
+nothing on its own. Is +170k a historical extreme (signal: crowded, unwind
+risk) or perfectly normal range (signal: ignore the headline number)? The
+z-score answers that question.
+
+**Interpretation:**
+
+| z-score | Meaning |
+|---|---|
+| `\|z\| > 2.0` | Statistical extreme (top/bottom ~2.5% of recent history) |
+| `\|z\| > 1.5` | Stretched positioning, watch for unwind |
+| `\|z\| > 1.0` | Above-average positioning |
+| `\|z\| < 1.0` | Normal range |
+
+## Setup with conda
+
+### 1. Create the environment
 
 ```bash
 conda env create -f environment.yml
 conda activate cot-fx
 ```
 
-### 2. Imposta la chiave API Anthropic
+### 2. (Optional) Set the Anthropic API key
 
 ```bash
 # Linux / macOS
@@ -36,97 +61,126 @@ $env:ANTHROPIC_API_KEY='sk-ant-...'
 set ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Per renderla persistente su Linux/macOS, aggiungila a `~/.bashrc` o `~/.zshrc`.
-Su Windows usa "Variabili d'ambiente" nelle impostazioni di sistema.
+To persist on Linux/macOS, add the line to `~/.bashrc` or `~/.zshrc`. On
+Windows use Settings → Environment Variables.
 
-> Senza la chiave lo script gira ugualmente, ma salta la sezione AI finale
-> mostrando quali setup *sarebbero stati* analizzati.
+> **Without the key the script still runs in full.** The AI review section
+> is skipped and a clear log message tells you why. All other analysis
+> (scraping, z-scores, ranking, top-3 selection) completes normally.
 
-### 3. Lancia lo script
+### 3. Run
 
 ```bash
 python cot_fx_analyzer.py
 ```
 
-## Cosa produce in output
+## Output sections
 
-1. **Tabella valute** ordinate per net decrescente (più long → più short)
-2. **Due matrici 8×8** forex: bias di lungo e momentum settimanale
-3. **Ranking completo** delle 28 coppie forex con etichette bias + allineamento
-4. **Tabella crypto/indici/commodities** ordinata per categoria e %OI
-5. **🤖 Analisi AI** dei 3 setup più puliti (bias forte + momentum allineato)
+1. **Currency table** sorted by net descending, with z-scores and percentile ranks
+2. **Two 8×8 forex matrices**: long-term bias and weekly momentum
+3. **Full ranking** of the 28 forex pairs with bias + alignment labels
+4. **Single-asset table** grouped by category, with z-scores
+5. **🤖 AI review** of the top-3 setups (if API key is set)
 
-### Logica
+## Top-3 selection logic
 
-Per ogni asset estraiamo **solo i dati Non-Commercial** (speculatori):
+A "clean setup" requires both:
+- significant bias (≥ |25k| for FX pairs, ≥ |10%| of OI for single assets)
+- aligned momentum (ΔNet pushing in the same direction)
 
-- `NET = Long - Short` → posizionamento corrente (bias di lungo)
-- `ΔNET = ΔLong - ΔShort` → variazione settimanale (momentum)
+Selected setups are scored 0–100 (70% bias, 30% momentum). Setups with
+extreme z-scores (`|z26| > 1.5`) get a score bonus of up to +15 because
+historical context matters: a strong bias that is ALSO a statistical extreme
+is operationally more interesting than a strong bias at "normal" levels.
 
-**Per le coppie forex:**
-- `Net_pair = Net(BASE) − Net(QUOTE)`
-- `ΔNet_pair = ΔNet(BASE) − ΔNet(QUOTE)`
+## AI review
 
-**Per gli asset singoli** (crypto/indici/commodity), il net viene normalizzato
-sul net%OI per essere confrontabile (un net di 200k su Gold = +45% di OI è
-molto più estremo di un net di 200k su Natural Gas che ha OI 4x più grande).
+When the API key is set, the script sends a structured prompt to Claude
+(`claude-sonnet-4-6`) with the JSON data of the 3 setups, **including their
+z-scores**. For each setup the model produces ~180 words covering:
 
-**Selezione top 3 per l'AI:** competono coppie FX e asset singoli con uno
-scoring 0–100 (70% bias di lungo, 30% momentum). Solo i setup con bias +
-momentum allineati sono candidati.
+1. **What the positioning says** — quantified via z-score, not just headline net
+2. **What the momentum says** — confirming or contradicting?
+3. **Risks and blind spots** — crowding, hidden divergences, macro events, cognitive biases
+4. **Operational notes** — what to look for on the chart, typical timeframe
 
-## L'analisi AI
+Plus a final "cross-context" section linking the 3 setups: macro theme,
+internal consistency, and which one is most/least solid given the z-scores.
 
-Lo script invia un prompt strutturato a Claude (modello `claude-sonnet-4-6`)
-con i dati JSON dei 3 setup, chiedendo per ognuno:
+The prompt explicitly bans entry/stop/target suggestions and generic
+disclaimers. The output is critical feedback, not advisory.
 
-1. **Cosa dice il posizionamento** (è affollato? è un estremo?)
-2. **Cosa dice il momentum** (conferma o smentisce?)
-3. **Rischi e blind spot** (unwind, divergenze nascoste, eventi macro, bias cognitivi)
-4. **Note operative** (cosa cercare sul grafico, orizzonte temporale)
+## Cost per run
 
-Più una sezione finale di contesto incrociato che lega i 3 setup.
+Typical prompt: ~800 input tokens, ~2400 output tokens. With Sonnet 4.6
+($3 input / $15 output per MTok):
 
-> Il prompt chiede esplicitamente all'AI di NON dare entry/stop/target.
-> L'output è feedback critico, non advisory.
+- Input:  800 × $3 / 1M  ≈ **$0.0024**
+- Output: 2400 × $15 / 1M  ≈ **$0.036**
+- **Total: ~4 cents per run**
 
-## Costo per esecuzione
+Running once a week (Saturday, after the Friday CFTC release) → roughly
+**$2/year**.
 
-Il prompt è circa **700 token in input** e **~2000 token in output**.
-Con Sonnet 4.6 ($3 input / $15 output per MTok):
+## Historical data cache
 
-- Input:  700 × $3 / 1M  ≈ **$0.0021**
-- Output: 2000 × $15 / 1M  ≈ **$0.030**
-- **Totale: ~3 centesimi per esecuzione**
+The CFTC API is queried once per instrument to download the last 60 weeks
+of data. Results are cached locally in `.cot_history_cache.json` (next to
+the script) and automatically refreshed every 6 days. First run downloads
+~60 KB total; subsequent runs hit the cache instantly.
 
-Lanciando lo script ogni sabato (quando esce il nuovo COT), spendi **circa
-$1.50 all'anno**.
+To force a refresh, delete the cache file:
+```bash
+rm .cot_history_cache.json
+```
 
-## Note operative
+## Tweaking thresholds
 
-- I report COT escono il **venerdì sera** (orario USA) con dati al **martedì
-  precedente**. Lanciare lo script sabato/domenica è il momento giusto.
-- Soglie di classificazione attuali (in `cot_fx_analyzer.py`):
-  - Bias coppia FX: `±25k` moderato, `±80k` forte
-  - Bias asset singolo (net%OI): `±10%` moderato, `±25%` estremo
-  - Momentum: rispettivamente `±3k` e `±0.5% OI`
-- Sono soglie ragionevoli ma non calibrate storicamente. Si possono tarare
-  modificando le funzioni `classify_*` nello script.
+All thresholds live in `cot_fx_analyzer.py`. Current defaults:
 
-## Manutenzione conda
+- **FX pair bias:** ±25k moderate, ±80k strong
+- **Single-asset bias (net%OI):** ±10% moderate, ±25% extreme
+- **Momentum FX:** ±3k weak, ±15k strong
+- **Momentum single asset:** ±0.5% OI weak, ±2% OI strong
+- **Z-score extreme:** |z| > 1.5
+
+These are reasonable but not statistically calibrated. After a few weeks of
+observation you may want to retune for your asset class.
+
+## Operational notes
+
+- COT reports are released **Friday evening US time** with data as of the
+  previous **Tuesday**. Running this script Saturday/Sunday is the right
+  cadence.
+- Some assets (Bitcoin in particular) are released with variable delay by
+  the CFTC. The script handles asymmetric report dates gracefully.
+- The z-score uses the prior 26 weeks (excluding the current observation)
+  so it measures "how unusual is today vs the past 6 months."
+
+## Conda maintenance
 
 ```bash
-# Aggiorna le dipendenze
+# Update dependencies
 conda env update -f environment.yml --prune
 
-# Rimuovi l'environment
+# Remove the environment
 conda env remove -n cot-fx
+```
+
+## File structure
+
+```
+cot_fx_analyzer/
+├── cot_fx_analyzer.py      # main script
+├── cot_history.py          # CFTC API + z-score module
+├── environment.yml         # conda environment definition
+├── README.md               # this file
+└── .cot_history_cache.json # (created on first run, ~60 KB)
 ```
 
 ## Disclaimer
 
-Strumento di supporto all'analisi del posizionamento speculativo, **non
-genera segnali di trading**. Il COT è un dato di contesto (medio periodo),
-non un trigger di entry. Il report ha sempre un ritardo strutturale di
-3-7 giorni rispetto al mercato. L'analisi AI è un sounding board critico,
-non advisory finanziaria.
+Positioning analysis tool, **not a trading signal generator**. The COT
+report is medium-term context, not an entry trigger. It always lags the
+market by 3–7 days. The AI review is a critical sounding board, not
+financial advice.
