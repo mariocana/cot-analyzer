@@ -7,4 +7,7 @@ dependencies:
   - requests>=2.31
   - beautifulsoup4>=4.12
   - lxml>=4.9
+  - flask>=3.0
   - pip
+  - pip:
+      - gunicorn>=21.0 ; platform_system != "Windows"

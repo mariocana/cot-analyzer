@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>COT Positioning Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e12;
+    --panel: #121820;
+    --panel-2: #161d27;
+    --line: #232d3a;
+    --ink: #e8eef5;
+    --dim: #7b8a9c;
+    --accent: #ffd23f;
+    --green: #3fd17a;
+    --red: #ff5d6c;
+    --blue: #5ab0ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    background-image:
+      radial-gradient(circle at 15% 0%, rgba(90,176,255,0.06), transparent 40%),
+      radial-gradient(circle at 90% 10%, rgba(255,210,63,0.05), transparent 35%);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    padding: 0 0 80px;
+  }
+  header {
+    border-bottom: 1px solid var(--line);
+    padding: 28px 32px 24px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 20px;
+    background: linear-gradient(180deg, rgba(18,24,32,0.6), transparent);
+  }
+  .brand h1 {
+    font-family: 'Archivo', sans-serif;
+    font-weight: 900;
+    font-size: 30px;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .brand h1 .dot { color: var(--accent); }
+  .brand p {
+    color: var(--dim);
+    font-size: 12px;
+    margin-top: 8px;
+    letter-spacing: 0.04em;
+  }
+  .controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .toggle {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--dim); cursor: pointer; user-select: none;
+  }
+  .toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+  button#run {
+    font-family: 'Archivo', sans-serif;
+    font-weight: 800;
+    font-size: 14px;
+    letter-spacing: 0.03em;
+    background: var(--accent);
+    color: #0a0e12;
+    border: none;
+    padding: 13px 26px;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.2s, opacity 0.2s;
+    box-shadow: 0 0 0 rgba(255,210,63,0);
+  }
+  button#run:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 24px rgba(255,210,63,0.25);
+  }
+  button#run:active:not(:disabled) { transform: translateY(0); }
+  button#run:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  main { padding: 28px 32px; max-width: 1280px; margin: 0 auto; }
+
+  /* status / progress */
+  #progress {
+    display: none;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 20px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    margin-bottom: 28px;
+    font-size: 13px;
+  }
+  #progress.active { display: flex; }
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #progress .msg { color: var(--ink); }
+
+  .empty {
+    text-align: center;
+    padding: 90px 20px;
+    color: var(--dim);
+  }
+  .empty .big {
+    font-family: 'Archivo', sans-serif;
+    font-weight: 800;
+    font-size: 22px;
+    color: var(--ink);
+    margin-bottom: 10px;
+  }
+
+  #results { display: none; }
+  #results.visible { display: block; }
+
+  .meta {
+    display: flex; gap: 28px; flex-wrap: wrap;
+    font-size: 12px; color: var(--dim);
+    padding: 14px 18px; margin-bottom: 26px;
+    background: var(--panel); border: 1px solid var(--line);
+  }
+  .meta b { color: var(--accent); font-weight: 700; }
+
+  section { margin-bottom: 38px; }
+  section > h2 {
+    font-family: 'Archivo', sans-serif;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th {
+    text-align: right; padding: 9px 12px; color: var(--dim);
+    font-weight: 500; border-bottom: 1px solid var(--line);
+    white-space: nowrap; font-size: 11px; letter-spacing: 0.03em;
+  }
+  th:first-child, td:first-child { text-align: left; }
+  td {
+    text-align: right; padding: 9px 12px;
+    border-bottom: 1px solid rgba(35,45,58,0.5);
+    white-space: nowrap;
+  }
+  tbody tr:hover { background: var(--panel-2); }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .ccy-name, .dim { color: var(--dim); font-size: 11px; }
+  .tag {
+    display: inline-block; padding: 2px 8px; font-size: 11px;
+    border: 1px solid var(--line); border-radius: 2px;
+  }
+  .z-extreme { color: var(--accent); font-weight: 700; }
+  .cat-row td {
+    color: var(--accent); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase; padding-top: 16px; border: none;
+  }
+
+  /* matrix */
+  .matrices { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 900px) { .matrices { grid-template-columns: 1fr; } }
+  .matrix-wrap h3 {
+    font-size: 11px; color: var(--dim); margin-bottom: 8px; font-weight: 500;
+  }
+  .matrix td, .matrix th { padding: 6px 8px; font-size: 11px; text-align: center; }
+  .matrix th:first-child, .matrix td:first-child { text-align: center; color: var(--dim); }
+  .heat { border-radius: 2px; }
+
+  /* top setups cards */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 800px) { .cards { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 3px;
+    background: var(--accent);
+  }
+  .card .rank {
+    font-family: 'Archivo', sans-serif; font-weight: 900;
+    font-size: 13px; color: var(--accent);
+  }
+  .card .label {
+    font-family: 'Archivo', sans-serif; font-weight: 800;
+    font-size: 19px; margin: 6px 0 12px; letter-spacing: -0.01em;
+  }
+  .card .row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; color: var(--dim); }
+  .card .row span:last-child { color: var(--ink); }
+
+  /* AI panel */
+  .ai-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--blue);
+    padding: 22px 24px;
+  }
+  .ai-panel .ai-head {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+    font-size: 12px; color: var(--dim);
+  }
+  .ai-panel .ai-head .badge {
+    background: var(--blue); color: #0a0e12; font-weight: 700;
+    padding: 2px 8px; font-size: 10px; letter-spacing: 0.05em;
+  }
+  .ai-body {
+    font-size: 13.5px; line-height: 1.7; color: #cdd7e3;
+    white-space: pre-wrap; word-wrap: break-word;
+  }
+  .ai-body strong { color: var(--ink); }
+  .ai-note {
+    padding: 16px 20px; background: var(--panel);
+    border: 1px solid var(--line); border-left: 3px solid var(--dim);
+    font-size: 12.5px; color: var(--dim); line-height: 1.6;
+  }
+  .ai-note code {
+    background: var(--panel-2); padding: 2px 6px; color: var(--accent);
+    border-radius: 2px;
+  }
+  .error-box {
+    padding: 20px; background: rgba(255,93,108,0.08);
+    border: 1px solid var(--red); color: var(--red); font-size: 13px;
+  }
+  footer {
+    text-align: center; color: var(--dim); font-size: 11px;
+    padding: 30px; border-top: 1px solid var(--line); margin-top: 40px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>COT POSITIONING DESK<span class="dot">.</span></h1>
+    <p>NON-COMMERCIAL · LEGACY FUTURES · LIVE FROM TRADINGSTER + CFTC</p>
+  </div>
+  <div class="controls">
+    <label class="toggle">
+      <input type="checkbox" id="aiToggle" checked>
+      AI review
+    </label>
+    <button id="run">RUN ANALYSIS</button>
+  </div>
+</header>
+
+<main>
+  <div id="progress">
+    <div class="spinner"></div>
+    <div class="msg" id="progressMsg">Starting...</div>
+  </div>
+
+  <div class="empty" id="empty">
+    <div class="big">No analysis yet</div>
+    <div>Hit <b style="color:var(--accent)">RUN ANALYSIS</b> to pull the latest COT data live.<br>
+    Scraping 19 instruments + computing z-scores takes ~40 seconds.</div>
+  </div>
+
+  <div id="results">
+    <div class="meta" id="meta"></div>
+
+    <section id="topSection">
+      <h2>Top 3 Cleanest Setups</h2>
+      <div class="cards" id="cards"></div>
+    </section>
+
+    <section id="aiSection">
+      <h2>AI Review</h2>
+      <div id="aiContainer"></div>
+    </section>
+
+    <section>
+      <h2>Currency Positioning</h2>
+      <table id="ccyTable"></table>
+    </section>
+
+    <section>
+      <h2>Crypto · Indices · Commodities</h2>
+      <table id="assetTable"></table>
+    </section>
+
+    <section>
+      <h2>FX Cross-Pair Matrices · ×1000 contracts</h2>
+      <div class="matrices">
+        <div class="matrix-wrap">
+          <h3>Long-term bias (Net base − Net quote)</h3>
+          <table class="matrix" id="biasMatrix"></table>
+        </div>
+        <div class="matrix-wrap">
+          <h3>Weekly momentum (ΔNet base − ΔNet quote)</h3>
+          <table class="matrix" id="momMatrix"></table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Full FX Pair Ranking · 28 pairs</h2>
+      <table id="pairTable"></table>
+    </section>
+  </div>
+</main>
+
+<footer>
+  Positioning context, not a signal generator. COT data lags the market by 3–7 days.
+</footer>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const runBtn = $('#run');
+let polling = null;
+
+function fmt(n) {
+  if (n === null || n === undefined) return '—';
+  return n.toLocaleString('en-US');
+}
+function signed(n) {
+  if (n === null || n === undefined) return '—';
+  return (n > 0 ? '+' : '') + n.toLocaleString('en-US');
+}
+function cls(n) { return n > 0 ? 'pos' : (n < 0 ? 'neg' : ''); }
+function zCls(z) { return (z !== null && Math.abs(z) > 1.5) ? 'z-extreme' : ''; }
+
+function heatColor(v) {
+  if (v === null) return 'transparent';
+  const max = 150;
+  const t = Math.max(-1, Math.min(1, v / max));
+  if (t > 0) return `rgba(63,209,122,${0.08 + t*0.32})`;
+  return `rgba(255,93,108,${0.08 + (-t)*0.32})`;
+}
+
+runBtn.addEventListener('click', startRun);
+
+async function startRun() {
+  runBtn.disabled = true;
+  $('#empty').style.display = 'none';
+  $('#results').classList.remove('visible');
+  $('#progress').classList.add('active');
+  $('#progressMsg').textContent = 'Starting...';
+
+  try {
+    const res = await fetch('/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({run_ai: $('#aiToggle').checked})
+    });
+    const {job_id} = await res.json();
+    pollStatus(job_id);
+  } catch (e) {
+    showError('Failed to start: ' + e.message);
+    finishRun();
+  }
+}
+
+function pollStatus(jobId) {
+  polling = setInterval(async () => {
+    try {
+      const res = await fetch('/status/' + jobId);
+      const data = await res.json();
+      $('#progressMsg').textContent = data.status_msg || 'Working...';
+      if (data.state === 'done') {
+        clearInterval(polling);
+        const r = await fetch('/result/' + jobId);
+        const result = await r.json();
+        render(result);
+        finishRun();
+      } else if (data.state === 'error' || data.state === 'not_found') {
+        clearInterval(polling);
+        const r = await fetch('/result/' + jobId);
+        const result = await r.json();
+        showError(result.error || 'Analysis failed');
+        finishRun();
+      }
+    } catch (e) {
+      clearInterval(polling);
+      showError('Polling error: ' + e.message);
+      finishRun();
+    }
+  }, 1000);
+}
+
+function finishRun() {
+  runBtn.disabled = false;
+  $('#progress').classList.remove('active');
+}
+
+function showError(msg) {
+  $('#empty').style.display = 'block';
+  $('#empty').innerHTML = '<div class="error-box">⚠ ' + msg + '</div>';
+}
+
+function render(data) {
+  if (!data.ok) { showError(data.error || 'Unknown error'); return; }
+
+  // meta
+  $('#meta').innerHTML = `
+    <div>Report date: <b>${data.report_date}</b></div>
+    <div>Generated: <b>${data.generated_at}</b></div>
+    <div>Instruments: <b>${data.counts.currencies + data.counts.assets}</b></div>
+    <div>FX pairs: <b>${data.counts.pairs}</b></div>`;
+
+  // top cards
+  $('#cards').innerHTML = data.top_setups.length ? data.top_setups.map((s, i) => `
+    <div class="card">
+      <div class="rank">#${i+1} · ${s.type === 'FX_PAIR' ? 'FX PAIR' : 'ASSET'}</div>
+      <div class="label">${s.label}</div>
+      <div class="row"><span>Bias</span><span>${s.bias}</span></div>
+      <div class="row"><span>Momentum</span><span>${s.momentum}</span></div>
+      <div class="row"><span>Net</span><span class="${cls(s.net_value)}">${signed(s.net_value)}</span></div>
+      <div class="row"><span>ΔNet</span><span class="${cls(s.chg_value)}">${signed(s.chg_value)}</span></div>
+      <div class="row"><span>z-score (26w)</span><span class="${zCls(s.z26)}">${s.z26 ?? '—'}</span></div>
+      <div class="row"><span>Score</span><span>${s.score}</span></div>
+    </div>`).join('') : '<div class="dim">No clean setups this week.</div>';
+
+  // AI
+  renderAI(data.ai);
+
+  // currency table
+  $('#ccyTable').innerHTML = `
+    <thead><tr>
+      <th>Ccy</th><th>Long</th><th>Short</th><th>Net</th>
+      <th>ΔLong</th><th>ΔShort</th><th>ΔNet</th><th>z(26w)</th><th>%rank</th>
+    </tr></thead><tbody>
+    ${data.currencies.map(c => `
+      <tr>
+        <td><b>${c.code}</b> <span class="ccy-name">${c.name}</span></td>
+        <td>${fmt(c.long)}</td><td>${fmt(c.short)}</td>
+        <td class="${cls(c.net)}">${signed(c.net)}</td>
+        <td class="${cls(c.long_chg)}">${signed(c.long_chg)}</td>
+        <td class="${cls(c.short_chg)}">${signed(c.short_chg)}</td>
+        <td class="${cls(c.net_chg)}">${signed(c.net_chg)}</td>
+        <td class="${zCls(c.z26)}">${c.z26 ?? '—'}</td>
+        <td class="dim">${c.pct_rank_26w !== null ? c.pct_rank_26w + '%' : '—'}</td>
+      </tr>`).join('')}
+    </tbody>`;
+
+  // asset table (grouped by category)
+  let lastCat = null;
+  let assetRows = '';
+  data.assets.forEach(a => {
+    if (a.category !== lastCat) {
+      assetRows += `<tr class="cat-row"><td colspan="7">${a.category}</td></tr>`;
+      lastCat = a.category;
+    }
+    assetRows += `
+      <tr>
+        <td><b>${a.code}</b> <span class="ccy-name">${a.name}</span></td>
+        <td class="${cls(a.net)}">${signed(a.net)}</td>
+        <td>${a.net_pct_oi}%</td>
+        <td class="${cls(a.net_chg)}">${signed(a.net_chg)}</td>
+        <td>${a.bias}</td>
+        <td>${a.momentum}</td>
+        <td class="${zCls(a.z26)}">${a.z26 ?? '—'}</td>
+      </tr>`;
+  });
+  $('#assetTable').innerHTML = `
+    <thead><tr>
+      <th>Asset</th><th>Net</th><th>%OI</th><th>ΔNet</th>
+      <th>Bias</th><th>Momentum</th><th>z(26w)</th>
+    </tr></thead><tbody>${assetRows}</tbody>`;
+
+  // matrices
+  renderMatrix('#biasMatrix', data.bias_matrix, data.matrix_codes);
+  renderMatrix('#momMatrix', data.momentum_matrix, data.matrix_codes);
+
+  // pair ranking
+  $('#pairTable').innerHTML = `
+    <thead><tr>
+      <th>Pair</th><th>Net diff</th><th>ΔNet diff</th>
+      <th>Bias</th><th>Momentum</th><th>Aligned</th>
+    </tr></thead><tbody>
+    ${data.pairs.map(p => `
+      <tr>
+        <td><b>${p.pair}</b></td>
+        <td class="${cls(p.net_diff)}">${signed(p.net_diff)}</td>
+        <td class="${cls(p.chg_diff)}">${signed(p.chg_diff)}</td>
+        <td>${p.bias}</td><td>${p.momentum}</td>
+        <td>${p.alignment}</td>
+      </tr>`).join('')}
+    </tbody>`;
+
+  $('#results').classList.add('visible');
+}
+
+function renderMatrix(sel, matrix, codes) {
+  let html = '<thead><tr><th></th>' + codes.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+  matrix.forEach(row => {
+    html += `<tr><td>${row.base}</td>`;
+    codes.forEach(q => {
+      const v = row.cells[q];
+      if (v === null) html += `<td class="dim">·</td>`;
+      else html += `<td class="heat" style="background:${heatColor(v)}">${v > 0 ? '+' : ''}${v}</td>`;
+    });
+    html += '</tr>';
+  });
+  $(sel).innerHTML = html + '</tbody>';
+}
+
+function renderAI(ai) {
+  const c = $('#aiContainer');
+  if (ai.status === 'ok') {
+    let body = ai.text
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    c.innerHTML = `<div class="ai-panel">
+      <div class="ai-head"><span class="badge">CLAUDE</span> ${ai.model} · critical sounding board</div>
+      <div class="ai-body">${body}</div></div>`;
+  } else if (ai.status === 'no_key') {
+    c.innerHTML = `<div class="ai-note">⚠ <code>ANTHROPIC_API_KEY</code> not set on the server.
+      AI review was skipped — all positioning data above is complete.
+      Set the key in the server environment to enable the AI sounding board.</div>`;
+  } else if (ai.status === 'no_setups') {
+    c.innerHTML = `<div class="ai-note">No clean setups with aligned bias + momentum this week, so no AI review was generated.</div>`;
+  } else if (ai.status === 'skipped') {
+    c.innerHTML = `<div class="ai-note">AI review toggled off for this run.</div>`;
+  } else {
+    c.innerHTML = `<div class="ai-note">⚠ AI review failed: ${ai.text || 'unknown error'}. Positioning data above is complete.</div>`;
+  }
+}
+</script>
+</body>
+</html>

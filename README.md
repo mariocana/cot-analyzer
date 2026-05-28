@@ -1,10 +1,15 @@
 # COT Multi-Asset Bias Analyzer + AI Review
 
-A command-line tool that scrapes COT Legacy (Futures Only) data from
+A COT positioning tool that scrapes COT Legacy (Futures Only) data from
 Tradingster.com for **19 instruments** (8 currencies + 11 single assets
 across crypto, indices and commodities), pulls **historical z-scores** from
 the official CFTC API, and produces a full positioning report with an
 optional AI review of the 3 cleanest setups.
+
+It runs two ways:
+- **CLI** — `python cot_fx_analyzer.py` prints the full report to the terminal
+- **Web app** — a deployable Flask interface with a "Run Analysis" button
+  that triggers a live scrape and renders everything in the browser
 
 ## Tracked instruments
 
@@ -110,7 +115,56 @@ internal consistency, and which one is most/least solid given the z-scores.
 The prompt explicitly bans entry/stop/target suggestions and generic
 disclaimers. The output is critical feedback, not advisory.
 
-## Cost per run
+## Web app
+
+### Run locally
+
+```bash
+conda activate cot-fx          # or: pip install -r requirements.txt
+export ANTHROPIC_API_KEY='sk-ant-...'   # optional
+python app.py
+```
+
+Open <http://localhost:5000>. Click **RUN ANALYSIS** — it scrapes 19
+instruments live and renders the full report in the browser (~40 seconds).
+The "AI review" toggle controls whether the Claude review runs.
+
+### How it works
+
+- `POST /run` starts the scrape in a background thread, returns a `job_id`
+- the browser polls `GET /status/<job_id>` once per second for live progress
+- when done, `GET /result/<job_id>` returns the full JSON, rendered client-side
+
+Because job state lives in process memory, run with a **single worker**.
+
+### Deploy online
+
+The app ships with `requirements.txt`, `Procfile`, and `Dockerfile`.
+
+**Render / Railway / Heroku-style:**
+```
+# Build command:  pip install -r requirements.txt
+# Start command:  gunicorn -w 1 -b 0.0.0.0:$PORT app:app --timeout 120
+```
+Set `ANTHROPIC_API_KEY` as an environment variable in the dashboard.
+
+**Docker:**
+```bash
+docker build -t cot-desk .
+docker run -p 8000:8000 -e ANTHROPIC_API_KEY='sk-ant-...' cot-desk
+# open http://localhost:8000
+```
+
+**Production notes:**
+- Always use `-w 1` (single worker). Job state is in-process; multiple
+  workers would split it. For multi-worker scaling, move job state to Redis.
+- The `--timeout 120` matters: a full scrape takes ~40s and gunicorn's
+  default 30s timeout would kill it.
+- Tradingster may rate-limit datacenter IPs. If scraping fails when deployed
+  on a cloud host, that's the cause — the CLI on a residential IP is unaffected.
+  A proxy or a longer retry/backoff can mitigate it.
+
+
 
 Typical prompt: ~800 input tokens, ~2400 output tokens. With Sonnet 4.6
 ($3 input / $15 output per MTok):
@@ -171,9 +225,16 @@ conda env remove -n cot-fx
 
 ```
 cot_fx_analyzer/
-├── cot_fx_analyzer.py      # main script
+├── cot_fx_analyzer.py      # main analysis script + CLI
 ├── cot_history.py          # CFTC API + z-score module
+├── core.py                 # analysis orchestration (returns structured data)
+├── app.py                  # Flask web app
+├── templates/
+│   └── index.html          # web frontend
 ├── environment.yml         # conda environment definition
+├── requirements.txt        # pip dependencies (for cloud deploys)
+├── Procfile                # Heroku/Railway start command
+├── Dockerfile              # container deploy
 ├── README.md               # this file
 └── .cot_history_cache.json # (created on first run, ~60 KB)
 ```
