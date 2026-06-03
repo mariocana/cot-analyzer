@@ -26,7 +26,9 @@ import uuid
 from flask import Flask, jsonify, render_template, request, abort
 
 from core import run_analysis, history_for
+from db import available_report_dates
 from instruments import INSTRUMENTS
+from datetime import date as _date
 
 
 app = Flask(__name__)
@@ -40,13 +42,14 @@ _jobs_lock = threading.Lock()
 # Background job runner (kept for compatibility with the polling frontend;
 # the analysis itself is now nearly instant)
 # ---------------------------------------------------------------------------
-def _run_job(job_id: str, run_ai: bool) -> None:
+def _run_job(job_id: str, run_ai: bool, as_of_date: _date | None) -> None:
     def progress(msg: str) -> None:
         with _jobs_lock:
             if job_id in _jobs:
                 _jobs[job_id]["status_msg"] = msg
     try:
-        result = run_analysis(progress=progress, run_ai=run_ai)
+        result = run_analysis(progress=progress, run_ai=run_ai,
+                              as_of_date=as_of_date)
         with _jobs_lock:
             _jobs[job_id]["state"] = "done"
             _jobs[job_id]["result"] = result
@@ -64,11 +67,35 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/report-dates")
+def api_report_dates():
+    """Return all distinct report dates in the DB, newest first.
+    Frontend uses this to populate the date dropdown."""
+    try:
+        dates = available_report_dates()
+        return jsonify({
+            "ok": True,
+            "dates": [d.isoformat() for d in dates],
+            "count": len(dates),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/run", methods=["POST"])
 def run():
     run_ai = True
+    as_of_date: _date | None = None
     if request.is_json:
-        run_ai = request.json.get("run_ai", True)
+        body = request.json or {}
+        run_ai = body.get("run_ai", True)
+        date_str = body.get("report_date")
+        if date_str:
+            try:
+                as_of_date = _date.fromisoformat(date_str)
+            except ValueError:
+                return jsonify({"ok": False,
+                                "error": f"Invalid date format: {date_str}"}), 400
     job_id = uuid.uuid4().hex
     with _jobs_lock:
         # Evict old jobs to keep memory bounded
@@ -78,7 +105,8 @@ def run():
         _jobs[job_id] = {"state": "running",
                          "status_msg": "Starting...",
                          "result": None}
-    t = threading.Thread(target=_run_job, args=(job_id, run_ai), daemon=True)
+    t = threading.Thread(target=_run_job,
+                         args=(job_id, run_ai, as_of_date), daemon=True)
     t.start()
     return jsonify({"job_id": job_id})
 

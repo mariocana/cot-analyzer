@@ -63,6 +63,28 @@
     font-size: 12px; color: var(--dim); cursor: pointer; user-select: none;
   }
   .toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+  /* Report date picker */
+  .date-picker {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .date-picker label {
+    font-size: 10px; letter-spacing: 0.08em; color: var(--dim);
+    text-transform: uppercase;
+  }
+  select#reportDate {
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 9px 12px; font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; cursor: pointer;
+    min-width: 180px;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237b8a9c' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+  }
+  select#reportDate:hover { border-color: var(--accent); }
+  select#reportDate:disabled { opacity: 0.5; cursor: wait; }
   button#run {
     font-family: 'Archivo', sans-serif; font-weight: 800;
     font-size: 14px; letter-spacing: 0.03em;
@@ -109,12 +131,21 @@
   #results.visible { display: block; }
 
   .meta {
-    display: flex; gap: 28px; flex-wrap: wrap;
+    display: flex; gap: 28px; flex-wrap: wrap; align-items: center;
     font-size: 12px; color: var(--dim);
     padding: 14px 18px; margin-bottom: 26px;
     background: var(--panel); border: 1px solid var(--line);
   }
   .meta b { color: var(--accent); font-weight: 700; }
+  .meta .badge-historical {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(255,210,63,0.12);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 4px 10px;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
 
   section { margin-bottom: 38px; }
   section > h2 {
@@ -307,6 +338,12 @@
     <p>NON-COMMERCIAL · LEGACY FUTURES · OFFICIAL CFTC DATA</p>
   </div>
   <div class="controls">
+    <div class="date-picker">
+      <label for="reportDate">Report date</label>
+      <select id="reportDate" disabled>
+        <option value="">Loading dates...</option>
+      </select>
+    </div>
     <label class="toggle">
       <input type="checkbox" id="aiToggle" checked>
       AI review
@@ -405,6 +442,7 @@
 const $ = sel => document.querySelector(sel);
 const $$ = sel => document.querySelectorAll(sel);
 const runBtn = $('#run');
+const dateSelect = $('#reportDate');
 let polling = null;
 let chartNet = null, chartOI = null;
 let currentHistory = null;
@@ -422,20 +460,46 @@ function heatColor(v) {
   return `rgba(255,93,108,${0.08 + (-t)*0.32})`;
 }
 
+// ===== Populate report date dropdown on load =====
+async function loadReportDates() {
+  try {
+    const r = await fetch('/api/report-dates');
+    const data = await r.json();
+    if (!data.ok || !data.dates.length) {
+      dateSelect.innerHTML = '<option value="">No dates available</option>';
+      return;
+    }
+    // First option = "Latest" (empty value → backend uses most recent)
+    let html = '<option value="">Latest (' + data.dates[0] + ')</option>';
+    html += data.dates.map((d, i) =>
+      `<option value="${d}">${d}${i === 0 ? ' (latest)' : ''}</option>`
+    ).join('');
+    dateSelect.innerHTML = html;
+    dateSelect.disabled = false;
+  } catch (e) {
+    dateSelect.innerHTML = '<option value="">Failed to load dates</option>';
+  }
+}
+loadReportDates();
+
 // ===== Run analysis =====
 runBtn.addEventListener('click', startRun);
 
 async function startRun() {
   runBtn.disabled = true;
+  dateSelect.disabled = true;
   $('#empty').style.display = 'none';
   $('#results').classList.remove('visible');
   $('#progress').classList.add('active');
   $('#progressMsg').textContent = 'Starting...';
   try {
+    const body = { run_ai: $('#aiToggle').checked };
+    // Only send report_date if user picked a non-default option
+    if (dateSelect.value) body.report_date = dateSelect.value;
     const res = await fetch('/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({run_ai: $('#aiToggle').checked})
+      body: JSON.stringify(body),
     });
     const {job_id} = await res.json();
     pollStatus(job_id);
@@ -474,6 +538,7 @@ function pollStatus(jobId) {
 
 function finishRun() {
   runBtn.disabled = false;
+  dateSelect.disabled = false;
   $('#progress').classList.remove('active');
 }
 
@@ -486,11 +551,15 @@ function showError(msg) {
 function render(data) {
   if (!data.ok) { showError(data.error || 'Unknown error'); return; }
 
-  $('#meta').innerHTML = `
+  let metaHtml = `
     <div>Report date: <b>${data.report_date}</b></div>
     <div>Generated: <b>${data.generated_at}</b></div>
     <div>Instruments: <b>${data.counts.currencies + data.counts.assets}</b></div>
     <div>FX pairs: <b>${data.counts.pairs}</b></div>`;
+  if (data.is_historical) {
+    metaHtml += `<div class="badge-historical">⏱ Historical report · backtest mode</div>`;
+  }
+  $('#meta').innerHTML = metaHtml;
 
   // Top setup cards (clickable for asset cards; pairs not clickable as they're combinations)
   $('#cards').innerHTML = data.top_setups.length ? data.top_setups.map((s, i) => {

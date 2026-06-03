@@ -169,18 +169,79 @@ def fetch_history(instrument_code: str, limit_weeks: int | None = None) -> list[
             return list(cur.fetchall())
 
 
-def fetch_latest_all() -> list[dict]:
-    """Return the most recent row for every instrument. Used by the web UI
-    to render the current positioning table without scraping anything."""
-    sql = """
-        SELECT DISTINCT ON (instrument_code)
-            instrument_code, report_date, nc_long, nc_short, open_interest
-        FROM cot_weekly
-        ORDER BY instrument_code, report_date DESC;
-    """
+def fetch_latest_all(as_of_date: date | None = None) -> list[dict]:
+    """Return one row per instrument:
+       - if as_of_date is None: the most recent row in DB
+       - if as_of_date is given: the most recent row ≤ as_of_date
+
+    Used by the web UI to render the positioning table without scraping,
+    optionally "rewound" to a past date for backtesting."""
+    if as_of_date is None:
+        sql = """
+            SELECT DISTINCT ON (instrument_code)
+                instrument_code, report_date, nc_long, nc_short, open_interest
+            FROM cot_weekly
+            ORDER BY instrument_code, report_date DESC;
+        """
+        params: tuple = ()
+    else:
+        sql = """
+            SELECT DISTINCT ON (instrument_code)
+                instrument_code, report_date, nc_long, nc_short, open_interest
+            FROM cot_weekly
+            WHERE report_date <= %s
+            ORDER BY instrument_code, report_date DESC;
+        """
+        params = (as_of_date,)
     with get_conn() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            return list(cur.fetchall())
+
+
+def available_report_dates() -> list[date]:
+    """Return all distinct report_dates present in the DB, newest first.
+    Used to populate the report-date dropdown in the UI."""
+    sql = """
+        SELECT DISTINCT report_date
+        FROM cot_weekly
+        ORDER BY report_date DESC;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
             cur.execute(sql)
+            return [row[0] for row in cur.fetchall()]
+
+
+def fetch_history_up_to(instrument_code: str, as_of_date: date,
+                        limit_weeks: int | None = None) -> list[dict]:
+    """Return historical rows for one instrument with report_date ≤ as_of_date,
+    oldest first. Used for z-score computation at a past date (avoiding
+    look-ahead bias)."""
+    if limit_weeks is None:
+        sql = """
+            SELECT report_date, nc_long, nc_short, open_interest
+            FROM cot_weekly
+            WHERE instrument_code = %s AND report_date <= %s
+            ORDER BY report_date ASC
+        """
+        params: tuple = (instrument_code, as_of_date)
+    else:
+        sql = """
+            SELECT * FROM (
+                SELECT report_date, nc_long, nc_short, open_interest
+                FROM cot_weekly
+                WHERE instrument_code = %s AND report_date <= %s
+                ORDER BY report_date DESC
+                LIMIT %s
+            ) AS t
+            ORDER BY report_date ASC
+        """
+        params = (instrument_code, as_of_date, limit_weeks)
+
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
             return list(cur.fetchall())
 
 

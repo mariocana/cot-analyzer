@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from instruments import INSTRUMENTS, Instrument
-from db import fetch_history, fetch_latest_all
+from db import fetch_history, fetch_history_up_to, fetch_latest_all, available_report_dates
 
 # Z-score lookback windows (in weeks)
 Z_LOOKBACK_PRIMARY = 26    # ~6 months
@@ -95,11 +95,15 @@ def _zscore(history_nets: list[int], current: int, lookback: int
     return z, pct_rank
 
 
-def build_snapshots() -> dict[str, AssetSnapshot]:
+def build_snapshots(as_of_date: date | None = None) -> dict[str, AssetSnapshot]:
     """Read all instruments from DB and build a complete snapshot per asset.
 
+    If `as_of_date` is given, the snapshot reflects the state of positioning
+    as of that date. Critically, the z-score and momentum are computed using
+    ONLY data ≤ as_of_date — no look-ahead bias allowed.
+
     For each instrument we:
-      1. Pull the full history (≤104 rows usually)
+      1. Pull the history up to (and including) as_of_date (or all if None)
       2. Pick the latest row as "current"
       3. Pick the second-latest as "previous" (for ΔNet)
       4. Compute z26 / z52 against the prior weeks (excluding current)
@@ -107,7 +111,11 @@ def build_snapshots() -> dict[str, AssetSnapshot]:
     snapshots: dict[str, AssetSnapshot] = {}
 
     for ticker, inst in INSTRUMENTS.items():
-        history = fetch_history(ticker)  # oldest → newest
+        if as_of_date is None:
+            history = fetch_history(ticker)
+        else:
+            history = fetch_history_up_to(ticker, as_of_date)
+
         if not history:
             continue
 
@@ -390,16 +398,29 @@ ANTHROPIC_MODEL   = "claude-sonnet-4-6"
 ANTHROPIC_VERSION = "2023-06-01"
 
 
-def _build_ai_prompt(top_setups: list[Setup], report_date: str) -> str:
+def _build_ai_prompt(top_setups: list[Setup], report_date: str,
+                     is_historical: bool = False) -> str:
     import json as _json
     setups_json = _json.dumps(
         [{"label": s.label, "type": s.asset_type, "bias": s.bias_label,
           "momentum": s.momentum_label, **s.details} for s in top_setups],
         indent=2, ensure_ascii=False
     )
-    return f"""Sei un analista esperto di posizionamento COT (Commitment of Traders) che assiste un trader prop swing. Stai facendo da sounding board critico, NON da advisor.
 
-DATI: COT Legacy Report Non-Commercial al {report_date}, i 3 setup con bias di lungo + momentum settimanale allineati. Ogni setup include lo z-score a 26 settimane (z26) e il percentile rank, calcolati sui dati storici ufficiali CFTC:
+    context_note = ""
+    if is_historical:
+        context_note = (
+            f"\n\n⚠ NOTA IMPORTANTE: Questo è un report STORICO al {report_date}, "
+            f"non l'ultimo report disponibile. L'utente sta facendo backtest. "
+            f"Analizza il posizionamento come se fossi a quella data, SENZA "
+            f"usare informazioni successive. Non dire mai 'come sappiamo oggi' "
+            f"o riferimenti a eventi posteriori al {report_date}. "
+            f"Le note operative sono illustrative, non operative.\n"
+        )
+
+    return f"""Sei un analista esperto di posizionamento COT (Commitment of Traders) che assiste un trader prop swing. Stai facendo da sounding board critico, NON da advisor.{context_note}
+
+DATI: COT Legacy Report Non-Commercial al {report_date}, i 3 setup con bias di lungo + momentum settimanale allineati. Ogni setup include lo z-score a 26 settimane (z26) e il percentile rank, calcolati sui dati storici ufficiali CFTC (sulle 26 settimane PRECEDENTI questo report):
 
 ```json
 {setups_json}
@@ -459,23 +480,33 @@ def _call_anthropic_api(prompt: str, api_key: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Public API: run_analysis (DB-backed, fast)
 # ---------------------------------------------------------------------------
-def run_analysis(progress=None, run_ai: bool = True) -> dict:
+def run_analysis(progress=None, run_ai: bool = True,
+                 as_of_date: date | None = None) -> dict:
     """Run the full analysis using only the local DB. No scraping.
 
-    Returns a JSON-serializable dict with the same shape as the old version.
+    If `as_of_date` is given, the analysis reflects positioning as of that
+    specific past report date — useful for backtesting. Z-scores and momentum
+    are computed using only data ≤ as_of_date (no look-ahead).
+
+    Returns a JSON-serializable dict with the same shape as before, plus an
+    `is_historical` flag when as_of_date is set.
     """
     def log(msg):
         if progress:
             progress(msg)
 
-    log("Loading positioning data from DB...")
-    snapshots = build_snapshots()
+    if as_of_date:
+        log(f"Loading positioning data as of {as_of_date}...")
+    else:
+        log("Loading latest positioning data from DB...")
+    snapshots = build_snapshots(as_of_date=as_of_date)
 
     if not snapshots:
         return {
             "ok": False,
             "error": ("No data in DB. Run `python batch.py` first to populate "
-                      "the database from the CFTC API."),
+                      "the database from the CFTC API.") if as_of_date is None
+                     else f"No data available on or before {as_of_date}.",
         }
 
     # Split FX from single assets
@@ -534,7 +565,8 @@ def run_analysis(progress=None, run_ai: bool = True) -> dict:
         else:
             log("Running AI review...")
             try:
-                prompt = _build_ai_prompt(top, report_date.isoformat())
+                prompt = _build_ai_prompt(top, report_date.isoformat(),
+                                          is_historical=(as_of_date is not None))
                 text = _call_anthropic_api(prompt, api_key)
                 if text:
                     ai_result = {"status": "ok", "text": text, "model": ANTHROPIC_MODEL}
@@ -549,6 +581,8 @@ def run_analysis(progress=None, run_ai: bool = True) -> dict:
         "ok": True,
         "report_date": report_date.isoformat(),
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "is_historical": as_of_date is not None,
+        "requested_as_of": as_of_date.isoformat() if as_of_date else None,
         "currencies": ccy_rows,
         "pairs": pair_rows,
         "bias_matrix": bias_matrix,
