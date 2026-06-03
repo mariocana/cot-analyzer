@@ -1,35 +1,47 @@
 """
-app.py — Flask web interface for the COT analyzer
+app.py — Flask web interface (Phase 3, DB-backed)
 ==================================================
-A deployable web app with a "Run Analysis" button that triggers a live
-scrape in a background thread. The frontend polls /status for progress and
-fetches /result when complete.
+Reads everything from the local PostgreSQL DB (populated by batch.py).
+No more live scraping.
+
+Routes:
+  GET  /                       → main analysis page
+  POST /run                    → trigger analysis (now nearly instant since
+                                  it just reads the DB); returns job_id for
+                                  compatibility with the existing frontend
+  GET  /status/<job_id>        → job progress
+  GET  /result/<job_id>        → JSON result
+  GET  /history/<ticker>       → historical chart page for one instrument
+  GET  /api/history/<ticker>   → raw JSON for chart consumption
+  GET  /health                 → health check
 
 Run locally:
     python app.py
-    # then open http://localhost:5000
-
-Deploy (production):
-    gunicorn -w 1 -b 0.0.0.0:8000 app:app
-    # NOTE: use -w 1 (single worker) because job state is in-process memory.
-    # For multi-worker, externalize job state to Redis.
+Production (Railway):
+    gunicorn -c gunicorn.conf.py app:app
 """
 
 import threading
 import uuid
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, render_template, request, abort
 
-from core import run_analysis
+from core import run_analysis, history_for
+from instruments import INSTRUMENTS
+
 
 app = Flask(__name__)
 
-# In-memory job store. Single-worker only (see deploy note above).
+# In-memory job store (single-worker only — see gunicorn.conf.py)
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
-def _run_job(job_id: str, run_ai: bool):
-    def progress(msg):
+# ---------------------------------------------------------------------------
+# Background job runner (kept for compatibility with the polling frontend;
+# the analysis itself is now nearly instant)
+# ---------------------------------------------------------------------------
+def _run_job(job_id: str, run_ai: bool) -> None:
+    def progress(msg: str) -> None:
         with _jobs_lock:
             if job_id in _jobs:
                 _jobs[job_id]["status_msg"] = msg
@@ -44,6 +56,9 @@ def _run_job(job_id: str, run_ai: bool):
             _jobs[job_id]["result"] = {"ok": False, "error": str(e)}
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -51,16 +66,17 @@ def index():
 
 @app.route("/run", methods=["POST"])
 def run():
-    """Start a new analysis job. Returns a job_id."""
-    run_ai = request.json.get("run_ai", True) if request.is_json else True
+    run_ai = True
+    if request.is_json:
+        run_ai = request.json.get("run_ai", True)
     job_id = uuid.uuid4().hex
     with _jobs_lock:
-        # Avoid stacking too many old jobs in memory
+        # Evict old jobs to keep memory bounded
         if len(_jobs) > 20:
-            oldest = sorted(_jobs.keys())[:10]
-            for k in oldest:
+            for k in sorted(_jobs.keys())[:10]:
                 _jobs.pop(k, None)
-        _jobs[job_id] = {"state": "running", "status_msg": "Starting...",
+        _jobs[job_id] = {"state": "running",
+                         "status_msg": "Starting...",
                          "result": None}
     t = threading.Thread(target=_run_job, args=(job_id, run_ai), daemon=True)
     t.start()
@@ -88,6 +104,35 @@ def result(job_id):
         return jsonify(job["result"])
 
 
+# ---------------------------------------------------------------------------
+# Historical chart endpoints
+# ---------------------------------------------------------------------------
+@app.route("/api/history/<ticker>")
+def api_history(ticker):
+    """Raw JSON consumed by the chart on the frontend."""
+    ticker = ticker.upper()
+    if ticker not in INSTRUMENTS:
+        return jsonify({"ok": False,
+                        "error": f"Unknown instrument: {ticker}"}), 404
+    return jsonify(history_for(ticker))
+
+
+@app.route("/history/<ticker>")
+def history_page(ticker):
+    """Full-page chart view for one instrument."""
+    ticker = ticker.upper()
+    if ticker not in INSTRUMENTS:
+        abort(404)
+    inst = INSTRUMENTS[ticker]
+    return render_template("history.html",
+                           ticker=ticker,
+                           name=inst.name,
+                           category=inst.category)
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})

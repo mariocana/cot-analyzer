@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
   :root {
     --bg: #0a0e12;
@@ -62,32 +64,23 @@
   }
   .toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
   button#run {
-    font-family: 'Archivo', sans-serif;
-    font-weight: 800;
-    font-size: 14px;
-    letter-spacing: 0.03em;
-    background: var(--accent);
-    color: #0a0e12;
-    border: none;
-    padding: 13px 26px;
-    cursor: pointer;
+    font-family: 'Archivo', sans-serif; font-weight: 800;
+    font-size: 14px; letter-spacing: 0.03em;
+    background: var(--accent); color: #0a0e12;
+    border: none; padding: 13px 26px; cursor: pointer;
     transition: transform 0.1s, box-shadow 0.2s, opacity 0.2s;
-    box-shadow: 0 0 0 rgba(255,210,63,0);
   }
   button#run:hover:not(:disabled) {
     transform: translateY(-1px);
     box-shadow: 0 6px 24px rgba(255,210,63,0.25);
   }
-  button#run:active:not(:disabled) { transform: translateY(0); }
   button#run:disabled { opacity: 0.5; cursor: not-allowed; }
 
   main { padding: 28px 32px; max-width: 1280px; margin: 0 auto; }
 
-  /* status / progress */
   #progress {
     display: none;
-    align-items: center;
-    gap: 14px;
+    align-items: center; gap: 14px;
     padding: 18px 20px;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -105,19 +98,11 @@
     flex-shrink: 0;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  #progress .msg { color: var(--ink); }
 
-  .empty {
-    text-align: center;
-    padding: 90px 20px;
-    color: var(--dim);
-  }
+  .empty { text-align: center; padding: 90px 20px; color: var(--dim); }
   .empty .big {
-    font-family: 'Archivo', sans-serif;
-    font-weight: 800;
-    font-size: 22px;
-    color: var(--ink);
-    margin-bottom: 10px;
+    font-family: 'Archivo', sans-serif; font-weight: 800;
+    font-size: 22px; color: var(--ink); margin-bottom: 10px;
   }
 
   #results { display: none; }
@@ -133,15 +118,10 @@
 
   section { margin-bottom: 38px; }
   section > h2 {
-    font-family: 'Archivo', sans-serif;
-    font-weight: 800;
-    font-size: 13px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--dim);
-    margin-bottom: 14px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--line);
+    font-family: 'Archivo', sans-serif; font-weight: 800;
+    font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--dim); margin-bottom: 14px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line);
   }
 
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -156,43 +136,53 @@
     border-bottom: 1px solid rgba(35,45,58,0.5);
     white-space: nowrap;
   }
-  tbody tr:hover { background: var(--panel-2); }
+  tr.clickable { cursor: pointer; transition: background 0.1s; }
+  tr.clickable:hover {
+    background: var(--panel-2);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  tr.clickable td:first-child::after {
+    content: '↗';
+    color: var(--dim);
+    opacity: 0;
+    margin-left: 8px;
+    font-size: 10px;
+    transition: opacity 0.1s;
+  }
+  tr.clickable:hover td:first-child::after { opacity: 1; }
+
   .pos { color: var(--green); }
   .neg { color: var(--red); }
   .ccy-name, .dim { color: var(--dim); font-size: 11px; }
-  .tag {
-    display: inline-block; padding: 2px 8px; font-size: 11px;
-    border: 1px solid var(--line); border-radius: 2px;
-  }
   .z-extreme { color: var(--accent); font-weight: 700; }
   .cat-row td {
     color: var(--accent); font-size: 10px; letter-spacing: 0.1em;
     text-transform: uppercase; padding-top: 16px; border: none;
+    cursor: default;
   }
 
-  /* matrix */
+  /* Heatmap matrices */
   .matrices { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
   @media (max-width: 900px) { .matrices { grid-template-columns: 1fr; } }
-  .matrix-wrap h3 {
-    font-size: 11px; color: var(--dim); margin-bottom: 8px; font-weight: 500;
-  }
+  .matrix-wrap h3 { font-size: 11px; color: var(--dim); margin-bottom: 8px; font-weight: 500; }
   .matrix td, .matrix th { padding: 6px 8px; font-size: 11px; text-align: center; }
   .matrix th:first-child, .matrix td:first-child { text-align: center; color: var(--dim); }
-  .heat { border-radius: 2px; }
 
-  /* top setups cards */
+  /* Top setup cards */
   .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   @media (max-width: 800px) { .cards { grid-template-columns: 1fr; } }
   .card {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    padding: 18px;
-    position: relative;
-    overflow: hidden;
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 18px; position: relative; overflow: hidden;
+    cursor: pointer; transition: transform 0.1s, border-color 0.2s;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
   }
   .card::before {
-    content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 3px;
-    background: var(--accent);
+    content: ''; position: absolute; top: 0; left: 0;
+    width: 100%; height: 3px; background: var(--accent);
   }
   .card .rank {
     font-family: 'Archivo', sans-serif; font-weight: 900;
@@ -202,15 +192,16 @@
     font-family: 'Archivo', sans-serif; font-weight: 800;
     font-size: 19px; margin: 6px 0 12px; letter-spacing: -0.01em;
   }
-  .card .row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; color: var(--dim); }
+  .card .row {
+    display: flex; justify-content: space-between;
+    font-size: 12px; padding: 4px 0; color: var(--dim);
+  }
   .card .row span:last-child { color: var(--ink); }
 
   /* AI panel */
   .ai-panel {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-left: 3px solid var(--blue);
-    padding: 22px 24px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--blue); padding: 22px 24px;
   }
   .ai-panel .ai-head {
     display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
@@ -238,6 +229,71 @@
     padding: 20px; background: rgba(255,93,108,0.08);
     border: 1px solid var(--red); color: var(--red); font-size: 13px;
   }
+
+  /* ----- Chart Modal ----- */
+  .modal-backdrop {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(10,14,18,0.85);
+    backdrop-filter: blur(4px);
+    z-index: 100;
+    align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .modal-backdrop.active { display: flex; }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    width: 100%; max-width: 1100px; max-height: 92vh;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .modal-head {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .modal-head h3 {
+    font-family: 'Archivo', sans-serif; font-weight: 800;
+    font-size: 19px; letter-spacing: -0.01em;
+  }
+  .modal-head .sub { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  .modal-actions { display: flex; gap: 10px; align-items: center; }
+  .range-btns { display: flex; gap: 4px; }
+  .range-btn {
+    background: var(--bg); border: 1px solid var(--line);
+    color: var(--dim); padding: 6px 12px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    cursor: pointer; transition: all 0.1s;
+  }
+  .range-btn:hover { color: var(--ink); border-color: var(--accent); }
+  .range-btn.active { background: var(--accent); color: #0a0e12; border-color: var(--accent); }
+  .modal-link {
+    color: var(--blue); text-decoration: none; font-size: 11px;
+    padding: 6px 10px; border: 1px solid var(--line);
+  }
+  .modal-link:hover { border-color: var(--blue); }
+  .modal-close {
+    background: none; border: 1px solid var(--line); color: var(--ink);
+    width: 32px; height: 32px; cursor: pointer; font-size: 16px;
+  }
+  .modal-close:hover { border-color: var(--red); color: var(--red); }
+  .modal-body {
+    padding: 20px 24px; overflow-y: auto; flex: 1;
+  }
+  .chart-wrap { position: relative; height: 380px; margin-bottom: 12px; }
+  .oi-wrap { position: relative; height: 90px; }
+  .chart-stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr));
+    gap: 12px; margin-top: 16px;
+    padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 12px;
+  }
+  .chart-stat { display: flex; flex-direction: column; gap: 3px; }
+  .chart-stat .lbl { color: var(--dim); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; }
+  .chart-stat .val { color: var(--ink); font-weight: 600; }
+
   footer {
     text-align: center; color: var(--dim); font-size: 11px;
     padding: 30px; border-top: 1px solid var(--line); margin-top: 40px;
@@ -248,7 +304,7 @@
 <header>
   <div class="brand">
     <h1>COT POSITIONING DESK<span class="dot">.</span></h1>
-    <p>NON-COMMERCIAL · LEGACY FUTURES · LIVE FROM TRADINGSTER + CFTC</p>
+    <p>NON-COMMERCIAL · LEGACY FUTURES · OFFICIAL CFTC DATA</p>
   </div>
   <div class="controls">
     <label class="toggle">
@@ -267,15 +323,15 @@
 
   <div class="empty" id="empty">
     <div class="big">No analysis yet</div>
-    <div>Hit <b style="color:var(--accent)">RUN ANALYSIS</b> to pull the latest COT data live.<br>
-    Scraping 19 instruments + computing z-scores takes ~40 seconds.</div>
+    <div>Hit <b style="color:var(--accent)">RUN ANALYSIS</b> to load the latest COT data.<br>
+    Click any asset row or top setup to see its historical chart.</div>
   </div>
 
   <div id="results">
     <div class="meta" id="meta"></div>
 
     <section id="topSection">
-      <h2>Top 3 Cleanest Setups</h2>
+      <h2>Top 3 Cleanest Setups <span style="color:var(--dim);font-weight:400;font-size:10px;text-transform:none;letter-spacing:0;">— click for chart</span></h2>
       <div class="cards" id="cards"></div>
     </section>
 
@@ -285,12 +341,12 @@
     </section>
 
     <section>
-      <h2>Currency Positioning</h2>
+      <h2>Currency Positioning <span style="color:var(--dim);font-weight:400;font-size:10px;text-transform:none;letter-spacing:0;">— click row for chart</span></h2>
       <table id="ccyTable"></table>
     </section>
 
     <section>
-      <h2>Crypto · Indices · Commodities</h2>
+      <h2>Crypto · Indices · Commodities <span style="color:var(--dim);font-weight:400;font-size:10px;text-transform:none;letter-spacing:0;">— click row for chart</span></h2>
       <table id="assetTable"></table>
     </section>
 
@@ -315,34 +371,58 @@
   </div>
 </main>
 
+<!-- Chart Modal -->
+<div class="modal-backdrop" id="modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h3 id="modalTitle">—</h3>
+        <div class="sub" id="modalSub">—</div>
+      </div>
+      <div class="modal-actions">
+        <div class="range-btns" id="rangeBtns">
+          <button class="range-btn" data-range="3M">3M</button>
+          <button class="range-btn active" data-range="1Y">1Y</button>
+          <button class="range-btn" data-range="2Y">2Y</button>
+        </div>
+        <a class="modal-link" id="modalLink" href="#" target="_blank">Open full page ↗</a>
+        <button class="modal-close" id="modalClose">×</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="chart-wrap"><canvas id="chartNet"></canvas></div>
+      <div class="oi-wrap"><canvas id="chartOI"></canvas></div>
+      <div class="chart-stats" id="chartStats"></div>
+    </div>
+  </div>
+</div>
+
 <footer>
   Positioning context, not a signal generator. COT data lags the market by 3–7 days.
 </footer>
 
 <script>
 const $ = sel => document.querySelector(sel);
+const $$ = sel => document.querySelectorAll(sel);
 const runBtn = $('#run');
 let polling = null;
+let chartNet = null, chartOI = null;
+let currentHistory = null;
+let currentRange = '1Y';
 
-function fmt(n) {
-  if (n === null || n === undefined) return '—';
-  return n.toLocaleString('en-US');
-}
-function signed(n) {
-  if (n === null || n === undefined) return '—';
-  return (n > 0 ? '+' : '') + n.toLocaleString('en-US');
-}
+// ===== Helpers =====
+function fmt(n) { if (n == null) return '—'; return n.toLocaleString('en-US'); }
+function signed(n) { if (n == null) return '—'; return (n > 0 ? '+' : '') + n.toLocaleString('en-US'); }
 function cls(n) { return n > 0 ? 'pos' : (n < 0 ? 'neg' : ''); }
 function zCls(z) { return (z !== null && Math.abs(z) > 1.5) ? 'z-extreme' : ''; }
-
 function heatColor(v) {
   if (v === null) return 'transparent';
-  const max = 150;
-  const t = Math.max(-1, Math.min(1, v / max));
+  const t = Math.max(-1, Math.min(1, v / 150));
   if (t > 0) return `rgba(63,209,122,${0.08 + t*0.32})`;
   return `rgba(255,93,108,${0.08 + (-t)*0.32})`;
 }
 
+// ===== Run analysis =====
 runBtn.addEventListener('click', startRun);
 
 async function startRun() {
@@ -351,7 +431,6 @@ async function startRun() {
   $('#results').classList.remove('visible');
   $('#progress').classList.add('active');
   $('#progressMsg').textContent = 'Starting...';
-
   try {
     const res = await fetch('/run', {
       method: 'POST',
@@ -390,7 +469,7 @@ function pollStatus(jobId) {
       showError('Polling error: ' + e.message);
       finishRun();
     }
-  }, 1000);
+  }, 500);
 }
 
 function finishRun() {
@@ -403,40 +482,43 @@ function showError(msg) {
   $('#empty').innerHTML = '<div class="error-box">⚠ ' + msg + '</div>';
 }
 
+// ===== Render =====
 function render(data) {
   if (!data.ok) { showError(data.error || 'Unknown error'); return; }
 
-  // meta
   $('#meta').innerHTML = `
     <div>Report date: <b>${data.report_date}</b></div>
     <div>Generated: <b>${data.generated_at}</b></div>
     <div>Instruments: <b>${data.counts.currencies + data.counts.assets}</b></div>
     <div>FX pairs: <b>${data.counts.pairs}</b></div>`;
 
-  // top cards
-  $('#cards').innerHTML = data.top_setups.length ? data.top_setups.map((s, i) => `
-    <div class="card">
-      <div class="rank">#${i+1} · ${s.type === 'FX_PAIR' ? 'FX PAIR' : 'ASSET'}</div>
-      <div class="label">${s.label}</div>
-      <div class="row"><span>Bias</span><span>${s.bias}</span></div>
-      <div class="row"><span>Momentum</span><span>${s.momentum}</span></div>
-      <div class="row"><span>Net</span><span class="${cls(s.net_value)}">${signed(s.net_value)}</span></div>
-      <div class="row"><span>ΔNet</span><span class="${cls(s.chg_value)}">${signed(s.chg_value)}</span></div>
-      <div class="row"><span>z-score (26w)</span><span class="${zCls(s.z26)}">${s.z26 ?? '—'}</span></div>
-      <div class="row"><span>Score</span><span>${s.score}</span></div>
-    </div>`).join('') : '<div class="dim">No clean setups this week.</div>';
+  // Top setup cards (clickable for asset cards; pairs not clickable as they're combinations)
+  $('#cards').innerHTML = data.top_setups.length ? data.top_setups.map((s, i) => {
+    const isSingle = s.type === 'SINGLE';
+    const ticker = isSingle ? s.label.split(' ')[0] : null;
+    return `
+      <div class="card" ${isSingle ? `onclick="openChart('${ticker}')"` : ''}>
+        <div class="rank">#${i+1} · ${isSingle ? 'ASSET' : 'FX PAIR'}</div>
+        <div class="label">${s.label}</div>
+        <div class="row"><span>Bias</span><span>${s.bias}</span></div>
+        <div class="row"><span>Momentum</span><span>${s.momentum}</span></div>
+        <div class="row"><span>Net</span><span class="${cls(s.net_value)}">${signed(s.net_value)}</span></div>
+        <div class="row"><span>ΔNet</span><span class="${cls(s.chg_value)}">${signed(s.chg_value)}</span></div>
+        <div class="row"><span>z-score (26w)</span><span class="${zCls(s.z26)}">${s.z26 ?? '—'}</span></div>
+        <div class="row"><span>Score</span><span>${s.score}</span></div>
+      </div>`;
+  }).join('') : '<div class="dim">No clean setups this week.</div>';
 
-  // AI
   renderAI(data.ai);
 
-  // currency table
+  // Currency table (clickable)
   $('#ccyTable').innerHTML = `
     <thead><tr>
       <th>Ccy</th><th>Long</th><th>Short</th><th>Net</th>
       <th>ΔLong</th><th>ΔShort</th><th>ΔNet</th><th>z(26w)</th><th>%rank</th>
     </tr></thead><tbody>
     ${data.currencies.map(c => `
-      <tr>
+      <tr class="clickable" onclick="openChart('${c.code}')">
         <td><b>${c.code}</b> <span class="ccy-name">${c.name}</span></td>
         <td>${fmt(c.long)}</td><td>${fmt(c.short)}</td>
         <td class="${cls(c.net)}">${signed(c.net)}</td>
@@ -448,7 +530,7 @@ function render(data) {
       </tr>`).join('')}
     </tbody>`;
 
-  // asset table (grouped by category)
+  // Asset table (clickable, grouped by category)
   let lastCat = null;
   let assetRows = '';
   data.assets.forEach(a => {
@@ -457,7 +539,7 @@ function render(data) {
       lastCat = a.category;
     }
     assetRows += `
-      <tr>
+      <tr class="clickable" onclick="openChart('${a.code}')">
         <td><b>${a.code}</b> <span class="ccy-name">${a.name}</span></td>
         <td class="${cls(a.net)}">${signed(a.net)}</td>
         <td>${a.net_pct_oi}%</td>
@@ -473,11 +555,9 @@ function render(data) {
       <th>Bias</th><th>Momentum</th><th>z(26w)</th>
     </tr></thead><tbody>${assetRows}</tbody>`;
 
-  // matrices
   renderMatrix('#biasMatrix', data.bias_matrix, data.matrix_codes);
   renderMatrix('#momMatrix', data.momentum_matrix, data.matrix_codes);
 
-  // pair ranking
   $('#pairTable').innerHTML = `
     <thead><tr>
       <th>Pair</th><th>Net diff</th><th>ΔNet diff</th>
@@ -503,7 +583,7 @@ function renderMatrix(sel, matrix, codes) {
     codes.forEach(q => {
       const v = row.cells[q];
       if (v === null) html += `<td class="dim">·</td>`;
-      else html += `<td class="heat" style="background:${heatColor(v)}">${v > 0 ? '+' : ''}${v}</td>`;
+      else html += `<td style="background:${heatColor(v)}">${v > 0 ? '+' : ''}${v}</td>`;
     });
     html += '</tr>';
   });
@@ -520,9 +600,7 @@ function renderAI(ai) {
       <div class="ai-head"><span class="badge">CLAUDE</span> ${ai.model} · critical sounding board</div>
       <div class="ai-body">${body}</div></div>`;
   } else if (ai.status === 'no_key') {
-    c.innerHTML = `<div class="ai-note">⚠ <code>ANTHROPIC_API_KEY</code> not set on the server.
-      AI review was skipped — all positioning data above is complete.
-      Set the key in the server environment to enable the AI sounding board.</div>`;
+    c.innerHTML = `<div class="ai-note">⚠ <code>ANTHROPIC_API_KEY</code> not set on the server. AI review skipped — all positioning data above is complete.</div>`;
   } else if (ai.status === 'no_setups') {
     c.innerHTML = `<div class="ai-note">No clean setups with aligned bias + momentum this week, so no AI review was generated.</div>`;
   } else if (ai.status === 'skipped') {
@@ -530,6 +608,216 @@ function renderAI(ai) {
   } else {
     c.innerHTML = `<div class="ai-note">⚠ AI review failed: ${ai.text || 'unknown error'}. Positioning data above is complete.</div>`;
   }
+}
+
+// ===== Chart Modal =====
+async function openChart(ticker) {
+  $('#modalTitle').textContent = ticker;
+  $('#modalSub').textContent = 'Loading...';
+  $('#modalLink').href = '/history/' + ticker;
+  $('#modal').classList.add('active');
+
+  try {
+    const res = await fetch('/api/history/' + ticker);
+    const data = await res.json();
+    if (!data.ok) {
+      $('#modalSub').textContent = '⚠ ' + (data.error || 'Failed to load');
+      return;
+    }
+    currentHistory = data;
+    $('#modalTitle').textContent = `${data.ticker} · ${data.name}`;
+    $('#modalSub').textContent = `${data.category} · ${data.n_weeks} weekly reports · ${data.oldest} → ${data.newest}`;
+    drawCharts(currentRange);
+    renderChartStats();
+  } catch (e) {
+    $('#modalSub').textContent = '⚠ Network error: ' + e.message;
+  }
+}
+
+function closeModal() {
+  $('#modal').classList.remove('active');
+  if (chartNet) { chartNet.destroy(); chartNet = null; }
+  if (chartOI)  { chartOI.destroy();  chartOI  = null; }
+  currentHistory = null;
+}
+
+$('#modalClose').addEventListener('click', closeModal);
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+$$('.range-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.range-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRange = btn.dataset.range;
+    if (currentHistory) drawCharts(currentRange);
+  });
+});
+
+function filterByRange(series, range) {
+  if (range === '2Y' || !range) return series;
+  const now = new Date(series[series.length - 1].date);
+  const cutoff = new Date(now);
+  if (range === '3M') cutoff.setMonth(cutoff.getMonth() - 3);
+  else if (range === '1Y') cutoff.setFullYear(cutoff.getFullYear() - 1);
+  return series.filter(p => new Date(p.date) >= cutoff);
+}
+
+function drawCharts(range) {
+  if (!currentHistory) return;
+  const data = filterByRange(currentHistory.series, range);
+  const labels = data.map(p => p.date);
+  const nets = data.map(p => p.net);
+  const ois  = data.map(p => p.open_interest);
+
+  // Color the area depending on whether each point is above/below zero
+  // We use a single segment color callback for fluid green/red areas
+  if (chartNet) chartNet.destroy();
+  if (chartOI)  chartOI.destroy();
+
+  const netCtx = document.getElementById('chartNet').getContext('2d');
+  chartNet = new Chart(netCtx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Non-Commercial Net',
+        data: nets,
+        stepped: true,
+        borderColor: ctx => {
+          const v = ctx.p1?.parsed?.y ?? 0;
+          return v >= 0 ? '#3fd17a' : '#ff5d6c';
+        },
+        segment: {
+          borderColor: ctx => (ctx.p1.parsed.y >= 0 ? '#3fd17a' : '#ff5d6c'),
+        },
+        backgroundColor: ctx => {
+          const chart = ctx.chart;
+          const {ctx: c, chartArea} = chart;
+          if (!chartArea) return null;
+          const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+          g.addColorStop(0,    'rgba(63,209,122,0.35)');
+          g.addColorStop(0.5,  'rgba(63,209,122,0.05)');
+          g.addColorStop(0.5,  'rgba(255,93,108,0.05)');
+          g.addColorStop(1,    'rgba(255,93,108,0.35)');
+          return g;
+        },
+        fill: { target: { value: 0 } },
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false, responsive: true,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#121820',
+          borderColor: '#232d3a',
+          borderWidth: 1,
+          titleColor: '#e8eef5',
+          bodyColor: '#e8eef5',
+          padding: 12,
+          callbacks: {
+            label: (ctx) => {
+              const i = ctx.dataIndex;
+              const p = data[i];
+              return [
+                `Net: ${p.net >= 0 ? '+' : ''}${p.net.toLocaleString()}`,
+                `Long: ${p.nc_long.toLocaleString()}`,
+                `Short: ${p.nc_short.toLocaleString()}`,
+                `Open Interest: ${p.open_interest.toLocaleString()}`,
+              ];
+            }
+          }
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: range === '3M' ? 'week' : 'month' },
+          ticks: { color: '#7b8a9c', font: { size: 10 } },
+          grid: { color: 'rgba(35,45,58,0.4)' },
+        },
+        y: {
+          ticks: {
+            color: '#7b8a9c',
+            font: { size: 10 },
+            callback: v => v.toLocaleString(),
+          },
+          grid: {
+            color: ctx => ctx.tick.value === 0 ? '#7b8a9c' : 'rgba(35,45,58,0.4)',
+            lineWidth: ctx => ctx.tick.value === 0 ? 1.5 : 1,
+          },
+        },
+      },
+    },
+  });
+
+  // OI bars (smaller chart below)
+  const oiCtx = document.getElementById('chartOI').getContext('2d');
+  chartOI = new Chart(oiCtx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Open Interest',
+        data: ois,
+        backgroundColor: 'rgba(123,138,156,0.4)',
+        borderColor: 'rgba(123,138,156,0.6)',
+        borderWidth: 0,
+        barThickness: range === '3M' ? 8 : 2,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false, responsive: true,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#121820',
+          borderColor: '#232d3a',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            title: () => 'Open Interest',
+            label: ctx => ctx.parsed.y.toLocaleString(),
+          }
+        },
+      },
+      scales: {
+        x: { type: 'time', display: false },
+        y: {
+          ticks: {
+            color: '#7b8a9c', font: { size: 9 },
+            callback: v => (v / 1000).toFixed(0) + 'k',
+          },
+          grid: { color: 'rgba(35,45,58,0.4)' },
+        },
+      },
+    },
+  });
+}
+
+function renderChartStats() {
+  if (!currentHistory || !currentHistory.series.length) return;
+  const s = currentHistory.series;
+  const last = s[s.length - 1];
+  const max = Math.max(...s.map(p => p.net));
+  const min = Math.min(...s.map(p => p.net));
+  const range = max - min;
+
+  $('#chartStats').innerHTML = `
+    <div class="chart-stat"><span class="lbl">Latest net</span><span class="val ${cls(last.net)}">${signed(last.net)}</span></div>
+    <div class="chart-stat"><span class="lbl">Latest long</span><span class="val">${fmt(last.nc_long)}</span></div>
+    <div class="chart-stat"><span class="lbl">Latest short</span><span class="val">${fmt(last.nc_short)}</span></div>
+    <div class="chart-stat"><span class="lbl">Open interest</span><span class="val">${fmt(last.open_interest)}</span></div>
+    <div class="chart-stat"><span class="lbl">2Y high (net)</span><span class="val pos">${signed(max)}</span></div>
+    <div class="chart-stat"><span class="lbl">2Y low (net)</span><span class="val neg">${signed(min)}</span></div>
+    <div class="chart-stat"><span class="lbl">2Y range</span><span class="val">${fmt(range)}</span></div>
+  `;
 }
 </script>
 </body>

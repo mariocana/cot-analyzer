@@ -6,4 +6,7 @@ dependencies:
   - python=3.11
   - requests>=2.31
   - psycopg>=3.1
+  - flask>=3.0
   - pip
+  - pip:
+      - gunicorn>=21.0 ; platform_system != "Windows"

@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ ticker }} · {{ name }} · COT History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0e12; --panel: #121820; --panel-2: #161d27;
+    --line: #232d3a; --ink: #e8eef5; --dim: #7b8a9c;
+    --accent: #ffd23f; --green: #3fd17a; --red: #ff5d6c; --blue: #5ab0ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    background-image:
+      radial-gradient(circle at 15% 0%, rgba(90,176,255,0.06), transparent 40%),
+      radial-gradient(circle at 90% 10%, rgba(255,210,63,0.05), transparent 35%);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh; padding: 0 0 60px;
+  }
+  header {
+    border-bottom: 1px solid var(--line);
+    padding: 22px 32px;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .back {
+    color: var(--dim); text-decoration: none; font-size: 12px;
+    padding: 6px 12px; border: 1px solid var(--line);
+  }
+  .back:hover { border-color: var(--accent); color: var(--ink); }
+  h1 {
+    font-family: 'Archivo', sans-serif; font-weight: 900;
+    font-size: 24px; letter-spacing: -0.01em;
+  }
+  h1 .ticker { color: var(--accent); }
+  .sub { font-size: 11px; color: var(--dim); margin-top: 4px; }
+
+  main { max-width: 1400px; margin: 32px auto; padding: 0 32px; }
+
+  .range-btns {
+    display: flex; gap: 4px; margin-bottom: 14px;
+  }
+  .range-btn {
+    background: var(--panel); border: 1px solid var(--line);
+    color: var(--dim); padding: 8px 16px;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    cursor: pointer; transition: all 0.1s;
+  }
+  .range-btn:hover { color: var(--ink); border-color: var(--accent); }
+  .range-btn.active { background: var(--accent); color: #0a0e12; border-color: var(--accent); }
+
+  .chart-card {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 24px;
+  }
+  .chart-wrap { position: relative; height: 480px; margin-bottom: 16px; }
+  .oi-wrap { position: relative; height: 120px; }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr));
+    gap: 14px; margin-top: 24px;
+    padding-top: 20px; border-top: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .stat {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 10px 0;
+  }
+  .stat .lbl {
+    color: var(--dim); font-size: 10px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .stat .val { color: var(--ink); font-weight: 600; font-size: 15px; }
+  .pos { color: var(--green); } .neg { color: var(--red); }
+
+  .loading { text-align: center; padding: 80px; color: var(--dim); }
+  .error-box {
+    padding: 24px; background: rgba(255,93,108,0.08);
+    border: 1px solid var(--red); color: var(--red);
+  }
+  footer {
+    text-align: center; color: var(--dim); font-size: 11px;
+    padding: 24px; margin-top: 40px; border-top: 1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1><span class="ticker">{{ ticker }}</span> · {{ name }}</h1>
+    <div class="sub" id="sub">{{ category }} · Loading history...</div>
+  </div>
+  <a class="back" href="/">← Back to desk</a>
+</header>
+
+<main>
+  <div id="loadingBox" class="loading">Loading historical data...</div>
+  <div id="chartContainer" style="display:none;">
+    <div class="range-btns">
+      <button class="range-btn" data-range="3M">3M</button>
+      <button class="range-btn active" data-range="1Y">1Y</button>
+      <button class="range-btn" data-range="2Y">2Y</button>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-wrap"><canvas id="chartNet"></canvas></div>
+      <div class="oi-wrap"><canvas id="chartOI"></canvas></div>
+      <div class="stats" id="stats"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  Source: official CFTC Public Reporting API (Legacy Futures Only).
+  Net = Non-Commercial Long − Non-Commercial Short.
+</footer>
+
+<script>
+const TICKER = "{{ ticker }}";
+const $ = sel => document.querySelector(sel);
+const $$ = sel => document.querySelectorAll(sel);
+let history = null;
+let chartNet = null, chartOI = null;
+let currentRange = '1Y';
+
+function fmt(n) { return n == null ? '—' : n.toLocaleString('en-US'); }
+function signed(n) { return n == null ? '—' : (n > 0 ? '+' : '') + n.toLocaleString('en-US'); }
+function cls(n) { return n > 0 ? 'pos' : (n < 0 ? 'neg' : ''); }
+
+async function load() {
+  try {
+    const r = await fetch('/api/history/' + TICKER);
+    const d = await r.json();
+    if (!d.ok) {
+      $('#loadingBox').innerHTML = '<div class="error-box">⚠ ' + (d.error || 'Failed to load') + '</div>';
+      return;
+    }
+    history = d;
+    $('#sub').textContent = `${d.category} · ${d.n_weeks} weekly reports · ${d.oldest} → ${d.newest}`;
+    $('#loadingBox').style.display = 'none';
+    $('#chartContainer').style.display = 'block';
+    drawCharts(currentRange);
+    renderStats();
+  } catch (e) {
+    $('#loadingBox').innerHTML = '<div class="error-box">⚠ Network error: ' + e.message + '</div>';
+  }
+}
+
+$$('.range-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.range-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRange = btn.dataset.range;
+    if (history) drawCharts(currentRange);
+  });
+});
+
+function filterByRange(series, range) {
+  if (range === '2Y' || !range) return series;
+  const last = new Date(series[series.length - 1].date);
+  const cutoff = new Date(last);
+  if (range === '3M') cutoff.setMonth(cutoff.getMonth() - 3);
+  else if (range === '1Y') cutoff.setFullYear(cutoff.getFullYear() - 1);
+  return series.filter(p => new Date(p.date) >= cutoff);
+}
+
+function drawCharts(range) {
+  const data = filterByRange(history.series, range);
+  const labels = data.map(p => p.date);
+  const nets = data.map(p => p.net);
+  const ois = data.map(p => p.open_interest);
+
+  if (chartNet) chartNet.destroy();
+  if (chartOI) chartOI.destroy();
+
+  chartNet = new Chart(document.getElementById('chartNet').getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Non-Commercial Net',
+        data: nets,
+        stepped: true,
+        segment: { borderColor: ctx => (ctx.p1.parsed.y >= 0 ? '#3fd17a' : '#ff5d6c') },
+        borderColor: '#3fd17a',
+        backgroundColor: ctx => {
+          const chart = ctx.chart;
+          const {ctx: c, chartArea} = chart;
+          if (!chartArea) return null;
+          const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+          g.addColorStop(0, 'rgba(63,209,122,0.35)');
+          g.addColorStop(0.5, 'rgba(63,209,122,0.05)');
+          g.addColorStop(0.5, 'rgba(255,93,108,0.05)');
+          g.addColorStop(1, 'rgba(255,93,108,0.35)');
+          return g;
+        },
+        fill: { target: { value: 0 } },
+        borderWidth: 2.5,
+        pointRadius: 0, pointHoverRadius: 5,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false, responsive: true,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#121820', borderColor: '#232d3a', borderWidth: 1,
+          titleColor: '#e8eef5', bodyColor: '#e8eef5', padding: 14,
+          callbacks: {
+            label: (ctx) => {
+              const p = data[ctx.dataIndex];
+              return [
+                `Net: ${p.net >= 0 ? '+' : ''}${p.net.toLocaleString()}`,
+                `Long: ${p.nc_long.toLocaleString()}`,
+                `Short: ${p.nc_short.toLocaleString()}`,
+                `Open Interest: ${p.open_interest.toLocaleString()}`,
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { unit: range === '3M' ? 'week' : 'month' },
+          ticks: { color: '#7b8a9c', font: { size: 11 } },
+          grid: { color: 'rgba(35,45,58,0.4)' },
+        },
+        y: {
+          ticks: { color: '#7b8a9c', font: { size: 11 }, callback: v => v.toLocaleString() },
+          grid: {
+            color: ctx => ctx.tick.value === 0 ? '#7b8a9c' : 'rgba(35,45,58,0.4)',
+            lineWidth: ctx => ctx.tick.value === 0 ? 1.5 : 1,
+          },
+        },
+      },
+    },
+  });
+
+  chartOI = new Chart(document.getElementById('chartOI').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Open Interest',
+        data: ois,
+        backgroundColor: 'rgba(123,138,156,0.4)',
+        borderWidth: 0,
+        barThickness: range === '3M' ? 8 : 3,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false, responsive: true,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#121820', borderColor: '#232d3a', borderWidth: 1, padding: 10,
+          callbacks: {
+            title: () => 'Open Interest',
+            label: ctx => ctx.parsed.y.toLocaleString(),
+          },
+        },
+      },
+      scales: {
+        x: { type: 'time', display: false },
+        y: {
+          ticks: {
+            color: '#7b8a9c', font: { size: 10 },
+            callback: v => (v / 1000).toFixed(0) + 'k',
+          },
+          grid: { color: 'rgba(35,45,58,0.4)' },
+        },
+      },
+    },
+  });
+}
+
+function renderStats() {
+  const s = history.series;
+  const last = s[s.length - 1];
+  const max = Math.max(...s.map(p => p.net));
+  const min = Math.min(...s.map(p => p.net));
+  const maxIdx = s.findIndex(p => p.net === max);
+  const minIdx = s.findIndex(p => p.net === min);
+  $('#stats').innerHTML = `
+    <div class="stat"><span class="lbl">Latest report</span><span class="val">${last.date}</span></div>
+    <div class="stat"><span class="lbl">Latest net</span><span class="val ${cls(last.net)}">${signed(last.net)}</span></div>
+    <div class="stat"><span class="lbl">Latest long</span><span class="val">${fmt(last.nc_long)}</span></div>
+    <div class="stat"><span class="lbl">Latest short</span><span class="val">${fmt(last.nc_short)}</span></div>
+    <div class="stat"><span class="lbl">Open interest</span><span class="val">${fmt(last.open_interest)}</span></div>
+    <div class="stat"><span class="lbl">2Y high (net)</span><span class="val pos">${signed(max)}</span><span class="lbl">on ${s[maxIdx].date}</span></div>
+    <div class="stat"><span class="lbl">2Y low (net)</span><span class="val neg">${signed(min)}</span><span class="lbl">on ${s[minIdx].date}</span></div>
+    <div class="stat"><span class="lbl">2Y range</span><span class="val">${fmt(max - min)}</span></div>
+  `;
+}
+
+load();
+</script>
+</body>
+</html>
