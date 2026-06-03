@@ -13,12 +13,19 @@ Run modes:
   python batch.py --instrument GC   # only one instrument
 
 Designed for Railway cron: just point a cron service at `python batch.py`.
+
+Exit codes:
+  0 = success (all instruments processed without errors)
+  1 = partial failure (some instruments failed) — Railway will mark the job
+       as failed and surface the error in the dashboard
+  2 = bad arguments
 """
 
 import argparse
+import signal
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from instruments import INSTRUMENTS, Instrument
 from cftc_client import fetch_reports
@@ -29,6 +36,25 @@ from db import init_schema, upsert_rows, latest_date_for, row_count, coverage_su
 BACKFILL_DAYS = 2 * 365
 
 
+# ---------------------------------------------------------------------------
+# Graceful shutdown handling (Railway may send SIGTERM if the job runs long)
+# ---------------------------------------------------------------------------
+_shutdown_requested = False
+
+
+def _handle_sigterm(signum, frame):
+    global _shutdown_requested
+    _shutdown_requested = True
+    print("\n⚠ SIGTERM received — finishing current instrument and exiting cleanly")
+
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
+signal.signal(signal.SIGINT, _handle_sigterm)
+
+
+# ---------------------------------------------------------------------------
+# Job logic
+# ---------------------------------------------------------------------------
 def _resolve_since(inst: Instrument, force_backfill: bool) -> date | None:
     """Decide the 'since_date' for this instrument:
        - backfill mode → 2 years ago
@@ -83,10 +109,13 @@ def process_one(inst: Instrument, force_backfill: bool = False) -> dict:
             "latest_date": latest, "error": None}
 
 
-def run(only_ticker: str | None = None, force_backfill: bool = False) -> None:
-    """Main entry point. Iterates all (or one) instruments and writes to DB."""
-    print(f"\n=== COT Batch Job — {date.today().isoformat()} ===")
+def run(only_ticker: str | None = None, force_backfill: bool = False) -> int:
+    """Main entry point. Returns the exit code (0=success, 1=partial failure)."""
+    start_time = time.time()
+    print(f"\n=== COT Batch Job — {datetime.now(timezone.utc).isoformat(timespec='seconds')} ===")
     print(f"Mode: {'BACKFILL (2y)' if force_backfill else 'incremental'}")
+    if only_ticker:
+        print(f"Target: single instrument ({only_ticker})")
 
     print("\n[1/3] Ensuring schema...")
     init_schema()
@@ -100,6 +129,10 @@ def run(only_ticker: str | None = None, force_backfill: bool = False) -> None:
 
     stats: list[dict] = []
     for inst in targets:
+        if _shutdown_requested:
+            print(f"  ! Stopping early (shutdown requested). "
+                  f"Processed {len(stats)}/{len(targets)} instruments.")
+            break
         result = process_one(inst, force_backfill=force_backfill)
         stats.append(result)
         # Be polite with the CFTC API
@@ -109,7 +142,9 @@ def run(only_ticker: str | None = None, force_backfill: bool = False) -> None:
     print("\n[3/3] Summary")
     total_new = sum(s["new_rows"] for s in stats)
     errors    = [s for s in stats if s["error"]]
-    print(f"      Instruments processed: {len(stats)}")
+    elapsed   = time.time() - start_time
+    print(f"      Elapsed:               {elapsed:.1f}s")
+    print(f"      Instruments processed: {len(stats)}/{len(targets)}")
     print(f"      Total rows written:    {total_new:,}")
     print(f"      Errors:                {len(errors)}")
     if errors:
@@ -127,9 +162,11 @@ def run(only_ticker: str | None = None, force_backfill: bool = False) -> None:
               f"{row['newest'].isoformat():<12} "
               f"{row['weeks']:>6}")
 
-    if errors:
-        sys.exit(1)
+    if errors or _shutdown_requested:
+        print("\n=== Done (with errors or interrupted) ===\n")
+        return 1
     print("\n=== Done ===\n")
+    return 0
 
 
 def main():
@@ -145,8 +182,10 @@ def main():
         print(f"Available: {', '.join(sorted(INSTRUMENTS))}")
         sys.exit(2)
 
-    run(only_ticker=args.instrument, force_backfill=args.backfill)
+    exit_code = run(only_ticker=args.instrument, force_backfill=args.backfill)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
     main()
+
