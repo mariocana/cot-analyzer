@@ -21,7 +21,6 @@ The API is free, no auth required, and accepts SoQL-style query parameters.
 import sys
 import time
 from datetime import date, datetime
-from typing import Iterator
 
 import requests
 
@@ -37,11 +36,15 @@ PAGE_LIMIT = 5000  # Socrata allows up to 50_000, 5000 is generous and safe
 def _build_url(cftc_code: str, since_date: date | None) -> str:
     """Build the CFTC API URL for one instrument.
 
-    The '+' in '13874+' (S&P 500) is significant — Socrata treats '+' as a
-    space character if URL-encoded, so we must keep it as a literal '+' in
-    the final URL. requests's params= would auto-encode it; we build the
-    query string manually instead.
+    The '+' in '13874+' (S&P 500 Consolidated) needs special handling:
+      - requests's params= auto-encodes '+' to '%2B' incorrectly for SoQL
+      - but a literal '+' in the URL gets parsed by Socrata as a space
+      - the only safe form is the explicit URL-encoded '%2B'
+    So we encode '+' → '%2B' ourselves before building the URL.
     """
+    # Manually encode '+' which has special meaning in URL query strings
+    encoded_code = cftc_code.replace("+", "%2B")
+
     select = (
         "report_date_as_yyyy_mm_dd,"
         "noncomm_positions_long_all,"
@@ -49,7 +52,7 @@ def _build_url(cftc_code: str, since_date: date | None) -> str:
         "open_interest_all"
     )
     parts = [
-        f"cftc_contract_market_code={cftc_code}",
+        f"cftc_contract_market_code={encoded_code}",
         f"$select={select}",
         f"$order=report_date_as_yyyy_mm_dd ASC",
         f"$limit={PAGE_LIMIT}",
@@ -59,8 +62,6 @@ def _build_url(cftc_code: str, since_date: date | None) -> str:
         iso = since_date.isoformat()
         parts.append(f"$where=report_date_as_yyyy_mm_dd > '{iso}T00:00:00.000'")
 
-    # urlencode would mangle '+' and operators — manual join with spaces
-    # encoded as %20 keeps things explicit
     qs = "&".join(p.replace(" ", "%20") for p in parts)
     return f"{CFTC_BASE_URL}?{qs}"
 
@@ -132,8 +133,9 @@ def fetch_reports(cftc_code: str,
 def fetch_latest_one(cftc_code: str) -> dict | None:
     """Fetch only the single most recent report for an instrument.
     Useful for ad-hoc verification (not used by the batch)."""
+    encoded_code = cftc_code.replace("+", "%2B")
     url = (
-        f"{CFTC_BASE_URL}?cftc_contract_market_code={cftc_code}"
+        f"{CFTC_BASE_URL}?cftc_contract_market_code={encoded_code}"
         f"&$select=report_date_as_yyyy_mm_dd,noncomm_positions_long_all,"
         f"noncomm_positions_short_all,open_interest_all"
         f"&$order=report_date_as_yyyy_mm_dd%20DESC&$limit=1"

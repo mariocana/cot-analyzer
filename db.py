@@ -54,6 +54,11 @@ def _get_dsn() -> str:
             "automatically once you add the PostgreSQL service. Locally, "
             "set it to e.g. postgresql://user:pass@localhost:5432/cot"
         )
+    # Defensive: strip wrapping quotes that some shells (notably Windows cmd
+    # with `set DATABASE_URL='...'`) accidentally include in the value.
+    dsn = dsn.strip()
+    if len(dsn) >= 2 and dsn[0] == dsn[-1] and dsn[0] in ("'", '"'):
+        dsn = dsn[1:-1]
     # Railway sometimes uses postgres:// prefix; psycopg wants postgresql://
     if dsn.startswith("postgres://"):
         dsn = "postgresql://" + dsn[len("postgres://"):]
@@ -146,8 +151,7 @@ def fetch_history(instrument_code: str, limit_weeks: int | None = None) -> list[
     """
     params: tuple = (instrument_code,)
     if limit_weeks is not None:
-        # Get the most recent N then re-sort ascending — done in SQL for clarity
-        sql = f"""
+        sql = """
             SELECT * FROM (
                 SELECT report_date, nc_long, nc_short, open_interest
                 FROM cot_weekly
