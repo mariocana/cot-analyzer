@@ -1,247 +1,255 @@
-# COT Multi-Asset Bias Analyzer + AI Review
+# COT Positioning Desk
 
-A COT positioning tool that scrapes COT Legacy (Futures Only) data from
-Tradingster.com for **19 instruments** (8 currencies + 11 single assets
-across crypto, indices and commodities), pulls **historical z-scores** from
-the official CFTC API, and produces a full positioning report with an
-optional AI review of the 3 cleanest setups.
+A self-hosted analytical tool for the weekly **Commitments of Traders**
+(CFTC) report. Tracks **Non-Commercial** speculator positioning across
+**32 instruments**, computes historical z-scores, identifies the cleanest
+setups each week, and serves everything through a fast web interface.
 
-It runs two ways:
-- **CLI** — `python cot_fx_analyzer.py` prints the full report to the terminal
-- **Web app** — a deployable Flask interface with a "Run Analysis" button
-  that triggers a live scrape and renders everything in the browser
+Designed as a **sounding board for swing traders** — positioning context,
+not a signal generator.
 
-## Tracked instruments
+---
 
-| Category | Assets |
+## Tracked instruments (32)
+
+| Category | Tickers |
 |---|---|
-| **Forex** | AUD, GBP, CAD, EUR, JPY, CHF, NZD, USD Index |
-| **Crypto** | Bitcoin, Ether (cash settled) |
-| **Index** | S&P 500 Consolidated |
-| **Commodities** | Crude Oil WTI, Natural Gas, Gold, Silver, Copper, Palladium, Platinum, Aluminum MWP |
+| **Forex** (8) | AUD, GBP, CAD, EUR, JPY, CHF, NZD, USD Index |
+| **Crypto** (2) | BTC, ETH |
+| **Index** (7) | SPX (Consolidated), ES (E-mini S&P 500), NQ (Nasdaq-100), YM (Dow $5), RTY (Russell 2000), EMD (E-mini S&P 400), VX (VIX) |
+| **Rates** (6) | ZQ (Fed Funds), ZT (2Y), ZF (5Y), ZN (10Y), ZB (30Y), UB (Ultra) |
+| **Commodities** (9) | Crude WTI (NYMEX + ICE), Natural Gas, Gold, Silver, Copper, Palladium, Platinum, Aluminum MWP |
 
-## What it does
+---
 
-For every instrument the tool extracts **Non-Commercial** (speculator) data
-only and computes three independent signals:
+## Architecture
 
-- **NET = Long − Short** → current positioning (long-term bias)
-- **ΔNET = ΔLong − ΔShort** → weekly change (short-term momentum)
-- **z(26w)** → z-score of current net vs the prior 26-week distribution
-  (from the official CFTC Public Reporting API)
+```
+┌───────────────────┐    ┌────────────────────┐    ┌──────────────────┐
+│  CFTC API         │──▶ │  batch.py          │──▶ │  PostgreSQL      │
+│  (Socrata, free)  │    │  Railway cron      │    │  cot_weekly      │
+└───────────────────┘    │  (Sat 09:00 UTC)   │    └────────┬─────────┘
+                         └────────────────────┘             │
+                                                            ▼ (millisecond reads)
+                                                   ┌──────────────────┐
+                                                   │  Flask web app   │
+                                                   │  + Chart.js UI   │
+                                                   └──────────────────┘
+```
 
-The z-score is the key innovation: an absolute net of +170k contracts means
-nothing on its own. Is +170k a historical extreme (signal: crowded, unwind
-risk) or perfectly normal range (signal: ignore the headline number)? The
-z-score answers that question.
+- **Single source**: official CFTC Public Reporting API (Socrata). No scraping.
+- **Persistent storage**: PostgreSQL accumulates the weekly history forever.
+- **Web reads from DB**: clicking "Run Analysis" is instant — no API calls.
+- **Idempotent batch**: re-runs are safe, upserts never duplicate.
 
-**Interpretation:**
+---
 
-| z-score | Meaning |
-|---|---|
-| `\|z\| > 2.0` | Statistical extreme (top/bottom ~2.5% of recent history) |
-| `\|z\| > 1.5` | Stretched positioning, watch for unwind |
-| `\|z\| > 1.0` | Above-average positioning |
-| `\|z\| < 1.0` | Normal range |
+## Features
 
-## Setup with conda
+- **Latest positioning** for all 32 instruments with one click
+- **Historical z-scores** (26w + 52w) computed on the prior weeks only — no look-ahead bias
+- **28 FX cross-pair biases** with momentum and alignment flags
+- **Cross-pair matrices** (long-term bias + weekly momentum)
+- **Top-3 cleanest setups** auto-selected (strong bias + aligned momentum, z-score bonus for extremes)
+- **Historical charts** for any instrument (modal or full-page), 3M / 1Y / 2Y zoom, with Open Interest below
+- **Backtest mode**: pick any past report date from the dropdown to recompute the entire analysis as of that date — z-scores honor the historical window
+- **Optional AI review** of the top-3 setups via the Anthropic API (Claude Sonnet 4.6)
 
-### 1. Create the environment
+---
 
+## Quick start (local)
+
+### 1. Set up the environment
+
+Using conda (recommended):
 ```bash
 conda env create -f environment.yml
 conda activate cot-fx
 ```
 
-### 2. (Optional) Set the Anthropic API key
+Or with pip:
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Set the DB URL
 
 ```bash
-# Linux / macOS
-export ANTHROPIC_API_KEY='sk-ant-...'
-
-# Windows PowerShell
-$env:ANTHROPIC_API_KEY='sk-ant-...'
+# Linux/macOS
+export DATABASE_URL='postgresql://user:pass@host:5432/dbname'
 
 # Windows cmd
-set ANTHROPIC_API_KEY=sk-ant-...
+set DATABASE_URL=postgresql://user:pass@host:5432/dbname
+
+# Windows PowerShell
+$env:DATABASE_URL='postgresql://user:pass@host:5432/dbname'
 ```
 
-To persist on Linux/macOS, add the line to `~/.bashrc` or `~/.zshrc`. On
-Windows use Settings → Environment Variables.
+### 3. Populate the database
 
-> **Without the key the script still runs in full.** The AI review section
-> is skipped and a clear log message tells you why. All other analysis
-> (scraping, z-scores, ranking, top-3 selection) completes normally.
-
-### 3. Run
+The first run downloads 2 years of history for every instrument (~30 seconds):
 
 ```bash
-python cot_fx_analyzer.py
+python batch.py
 ```
 
-## Output sections
+Subsequent runs are incremental — only new reports are fetched.
 
-1. **Currency table** sorted by net descending, with z-scores and percentile ranks
-2. **Two 8×8 forex matrices**: long-term bias and weekly momentum
-3. **Full ranking** of the 28 forex pairs with bias + alignment labels
-4. **Single-asset table** grouped by category, with z-scores
-5. **🤖 AI review** of the top-3 setups (if API key is set)
-
-## Top-3 selection logic
-
-A "clean setup" requires both:
-- significant bias (≥ |25k| for FX pairs, ≥ |10%| of OI for single assets)
-- aligned momentum (ΔNet pushing in the same direction)
-
-Selected setups are scored 0–100 (70% bias, 30% momentum). Setups with
-extreme z-scores (`|z26| > 1.5`) get a score bonus of up to +15 because
-historical context matters: a strong bias that is ALSO a statistical extreme
-is operationally more interesting than a strong bias at "normal" levels.
-
-## AI review
-
-When the API key is set, the script sends a structured prompt to Claude
-(`claude-sonnet-4-6`) with the JSON data of the 3 setups, **including their
-z-scores**. For each setup the model produces ~180 words covering:
-
-1. **What the positioning says** — quantified via z-score, not just headline net
-2. **What the momentum says** — confirming or contradicting?
-3. **Risks and blind spots** — crowding, hidden divergences, macro events, cognitive biases
-4. **Operational notes** — what to look for on the chart, typical timeframe
-
-Plus a final "cross-context" section linking the 3 setups: macro theme,
-internal consistency, and which one is most/least solid given the z-scores.
-
-The prompt explicitly bans entry/stop/target suggestions and generic
-disclaimers. The output is critical feedback, not advisory.
-
-## Web app
-
-### Run locally
+### 4. Launch the web app
 
 ```bash
-conda activate cot-fx          # or: pip install -r requirements.txt
-export ANTHROPIC_API_KEY='sk-ant-...'   # optional
 python app.py
 ```
 
-Open <http://localhost:5000>. Click **RUN ANALYSIS** — it scrapes 19
-instruments live and renders the full report in the browser (~40 seconds).
-The "AI review" toggle controls whether the Claude review runs.
+Open <http://localhost:5000> and click **RUN ANALYSIS**.
 
-### How it works
-
-- `POST /run` starts the scrape in a background thread, returns a `job_id`
-- the browser polls `GET /status/<job_id>` once per second for live progress
-- when done, `GET /result/<job_id>` returns the full JSON, rendered client-side
-
-Because job state lives in process memory, run with a **single worker**.
-
-### Deploy online
-
-The app ships with `requirements.txt`, `Procfile`, and `Dockerfile`.
-
-**Render / Railway / Heroku-style:**
-```
-# Build command:  pip install -r requirements.txt
-# Start command:  gunicorn -w 1 -b 0.0.0.0:$PORT app:app --timeout 120
-```
-Set `ANTHROPIC_API_KEY` as an environment variable in the dashboard.
-
-**Docker:**
-```bash
-docker build -t cot-desk .
-docker run -p 8000:8000 -e ANTHROPIC_API_KEY='sk-ant-...' cot-desk
-# open http://localhost:8000
-```
-
-**Production notes:**
-- Always use `-w 1` (single worker). Job state is in-process; multiple
-  workers would split it. For multi-worker scaling, move job state to Redis.
-- The `--timeout 120` matters: a full scrape takes ~40s and gunicorn's
-  default 30s timeout would kill it.
-- Tradingster may rate-limit datacenter IPs. If scraping fails when deployed
-  on a cloud host, that's the cause — the CLI on a residential IP is unaffected.
-  A proxy or a longer retry/backoff can mitigate it.
-
-
-
-Typical prompt: ~800 input tokens, ~2400 output tokens. With Sonnet 4.6
-($3 input / $15 output per MTok):
-
-- Input:  800 × $3 / 1M  ≈ **$0.0024**
-- Output: 2400 × $15 / 1M  ≈ **$0.036**
-- **Total: ~4 cents per run**
-
-Running once a week (Saturday, after the Friday CFTC release) → roughly
-**$2/year**.
-
-## Historical data cache
-
-The CFTC API is queried once per instrument to download the last 60 weeks
-of data. Results are cached locally in `.cot_history_cache.json` (next to
-the script) and automatically refreshed every 6 days. First run downloads
-~60 KB total; subsequent runs hit the cache instantly.
-
-To force a refresh, delete the cache file:
-```bash
-rm .cot_history_cache.json
-```
-
-## Tweaking thresholds
-
-All thresholds live in `cot_fx_analyzer.py`. Current defaults:
-
-- **FX pair bias:** ±25k moderate, ±80k strong
-- **Single-asset bias (net%OI):** ±10% moderate, ±25% extreme
-- **Momentum FX:** ±3k weak, ±15k strong
-- **Momentum single asset:** ±0.5% OI weak, ±2% OI strong
-- **Z-score extreme:** |z| > 1.5
-
-These are reasonable but not statistically calibrated. After a few weeks of
-observation you may want to retune for your asset class.
-
-## Operational notes
-
-- COT reports are released **Friday evening US time** with data as of the
-  previous **Tuesday**. Running this script Saturday/Sunday is the right
-  cadence.
-- Some assets (Bitcoin in particular) are released with variable delay by
-  the CFTC. The script handles asymmetric report dates gracefully.
-- The z-score uses the prior 26 weeks (excluding the current observation)
-  so it measures "how unusual is today vs the past 6 months."
-
-## Conda maintenance
+### Optional: enable AI review
 
 ```bash
-# Update dependencies
-conda env update -f environment.yml --prune
-
-# Remove the environment
-conda env remove -n cot-fx
+export ANTHROPIC_API_KEY='sk-ant-...'
 ```
 
-## File structure
+Without it, the AI review section shows "skipped" and everything else works
+normally.
+
+---
+
+## Batch usage
+
+```bash
+python batch.py                       # incremental (run after every weekly CFTC release)
+python batch.py --backfill            # force re-download of 2 years for all instruments
+python batch.py --instrument GC       # only one instrument (useful for debugging)
+python batch.py --instrument ZB --backfill   # backfill a newly added instrument
+```
+
+Exit codes: `0` = success, `1` = partial failure, `2` = bad arguments.
+Railway's cron dashboard surfaces failures clearly.
+
+---
+
+## Project structure
 
 ```
-cot_fx_analyzer/
-├── cot_fx_analyzer.py      # main analysis script + CLI
-├── cot_history.py          # CFTC API + z-score module
-├── core.py                 # analysis orchestration (returns structured data)
-├── app.py                  # Flask web app
+cot_v5/
+├── instruments.py        ← Single source of truth for the 32 instruments
+├── db.py                 ← PostgreSQL layer (schema, upserts, queries)
+├── cftc_client.py        ← CFTC API client (handles the '+' in S&P codes)
+├── batch.py              ← Weekly orchestrator (CFTC → DB)
+├── core.py               ← Analysis: snapshots, z-scores, top-3, AI prompt
+├── app.py                ← Flask web app
 ├── templates/
-│   └── index.html          # web frontend
-├── environment.yml         # conda environment definition
-├── requirements.txt        # pip dependencies (for cloud deploys)
-├── Procfile                # Heroku/Railway start command
-├── Dockerfile              # container deploy
-├── README.md               # this file
-└── .cot_history_cache.json # (created on first run, ~60 KB)
+│   ├── index.html        ← Main dashboard (clickable tables + modal charts)
+│   └── history.html      ← Full-page history view per instrument
+├── environment.yml       ← Conda environment
+├── requirements.txt      ← pip dependencies
+├── Procfile              ← Heroku/Railway start command
+├── gunicorn.conf.py      ← Production server config
+├── railway.json          ← Railway web service config
+├── railway-cron.json     ← Railway cron service config (Sat 09:00 UTC)
+└── DEPLOY.md             ← Step-by-step Railway deployment guide
 ```
 
-## Disclaimer
+---
 
-Positioning analysis tool, **not a trading signal generator**. The COT
-report is medium-term context, not an entry trigger. It always lags the
-market by 3–7 days. The AI review is a critical sounding board, not
-financial advice.
+## Deploy on Railway
+
+Full step-by-step instructions in **[DEPLOY.md](DEPLOY.md)**. Summary:
+
+1. Push the code to GitHub
+2. Create a **PostgreSQL** service in Railway
+3. Create a **web service** from the GitHub repo
+   - reference `DATABASE_URL` from Postgres
+   - generate public domain
+4. Create a **cron service** from the same repo
+   - start command: `python batch.py`
+   - cron schedule: `0 9 * * 6` (Saturday 09:00 UTC)
+   - restart policy: Never
+   - same `DATABASE_URL` reference
+
+After deploy, every Saturday morning the cron pulls fresh CFTC data and the
+web app shows the new positioning automatically on the next "Run Analysis"
+click.
+
+---
+
+## How positions and signals are computed
+
+For every instrument:
+
+- `NET = NonComm_Long − NonComm_Short` (current bias)
+- `ΔNET = ΔLong − ΔShort` (weekly momentum vs the prior report)
+- `z(26w) = (NET − mean_26w) / stdev_26w` against the prior 26 weeks **excluding** the current observation
+- `pct_rank_26w` = percentile rank of current NET within the prior 26 weeks
+
+**Z-score interpretation**:
+
+| \|z26\| | Meaning |
+|---|---|
+| > 2.0 | Statistical extreme (top/bottom ~2.5% of recent history) |
+| > 1.5 | Stretched, watch for unwind |
+| > 1.0 | Above-average positioning |
+| < 1.0 | Within normal range |
+
+**For FX pairs** (BASE/QUOTE): everything is computed as a difference
+between the two legs (`net_BASE − net_QUOTE`). The same z-score logic
+applies per currency, and the top-3 selector gives a bonus if either leg
+is at a statistical extreme.
+
+---
+
+## Cost expectations
+
+| Component | Resource use | Cost |
+|---|---|---|
+| Railway Postgres | <100 MB | Free tier |
+| Railway Web | ~50 MB RAM idle | Free tier |
+| Railway Cron | ~60 s/week | Almost zero |
+| Anthropic AI review (Claude Sonnet 4.6) | ~3000 tokens/run | ~$0.04 per run, ~$2/year if weekly |
+
+---
+
+## Caveats and honest limitations
+
+1. **The COT is a context indicator, not a leading signal.** It lags the
+   market by 3-7 days. Use it for medium-term positioning context, never
+   as an entry trigger.
+
+2. **Z-score thresholds (±1.5, ±2.0) are conventional, not statistically
+   calibrated** for each instrument. Different markets have different
+   "normal" volatilities of positioning. After observing for a few months,
+   you may want to recalibrate.
+
+3. **Backtest mode is for studying past positioning, not for finding
+   patterns that predict returns.** Cherry-picking dates where the COT
+   "called" a move is a recipe for self-deception. The z-score is
+   look-ahead-free, but a backtest run on a handful of hand-picked dates
+   isn't a strategy validation.
+
+4. **The Top-3 selector with 32 instruments tends to favor large-OI assets**
+   (Treasuries, big indices). If you notice it gets monothematic, the
+   scoring formula in `core.py` can be tuned to balance categories.
+
+5. **The web app has no authentication.** Anyone who knows the URL can
+   trigger analyses. If you deploy publicly and enable the AI review, also
+   add basic auth or rate-limiting.
+
+---
+
+## Data source
+
+All data comes from the official **CFTC Public Reporting Environment**
+(Socrata API), dataset `6dca-aqww` — Commitments of Traders, Legacy Futures
+Only. No authentication required, no rate limits in practice. The CFTC
+publishes new reports every **Friday evening US time**, with data as of
+the previous **Tuesday**.
+
+---
+
+## License & disclaimer
+
+Personal-use analytical tool. Provided as-is, no warranty.
+
+**This is not financial advice.** The output of this tool — including the
+AI review — is informational only and should not be the sole basis for
+trading decisions.
