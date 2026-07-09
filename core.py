@@ -480,16 +480,18 @@ def _call_anthropic_api(prompt: str, api_key: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Public API: run_analysis (DB-backed, fast)
 # ---------------------------------------------------------------------------
-def run_analysis(progress=None, run_ai: bool = True,
-                 as_of_date: date | None = None) -> dict:
-    """Run the full analysis using only the local DB. No scraping.
+def run_analysis(progress=None, as_of_date: date | None = None) -> dict:
+    """Run the full analysis using only the local DB. No scraping, no AI.
+
+    The AI overview is now a separate, on-demand step (see ai_top3_overview
+    and ai_asset_overview). This function only computes the positioning data.
 
     If `as_of_date` is given, the analysis reflects positioning as of that
     specific past report date — useful for backtesting. Z-scores and momentum
     are computed using only data ≤ as_of_date (no look-ahead).
 
-    Returns a JSON-serializable dict with the same shape as before, plus an
-    `is_historical` flag when as_of_date is set.
+    Returns a JSON-serializable dict with an `is_historical` flag when
+    as_of_date is set.
     """
     def log(msg):
         if progress:
@@ -554,28 +556,6 @@ def run_analysis(progress=None, run_ai: bool = True,
     # Report date = max date across snapshots
     report_date = max(s.report_date for s in snapshots.values())
 
-    # AI review
-    ai_result = {"status": "skipped", "text": None, "model": None}
-    if run_ai:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            ai_result["status"] = "no_key"
-        elif not top:
-            ai_result["status"] = "no_setups"
-        else:
-            log("Running AI review...")
-            try:
-                prompt = _build_ai_prompt(top, report_date.isoformat(),
-                                          is_historical=(as_of_date is not None))
-                text = _call_anthropic_api(prompt, api_key)
-                if text:
-                    ai_result = {"status": "ok", "text": text, "model": ANTHROPIC_MODEL}
-                else:
-                    ai_result["status"] = "error"
-            except Exception as e:
-                ai_result["status"] = "error"
-                ai_result["text"] = str(e)
-
     log("Done.")
     return {
         "ok": True,
@@ -590,7 +570,6 @@ def run_analysis(progress=None, run_ai: bool = True,
         "matrix_codes": matrix_codes,
         "assets": asset_rows,
         "top_setups": top_setups,
-        "ai": ai_result,
         "counts": {
             "currencies": len(currencies),
             "assets":     len(assets),
@@ -634,3 +613,173 @@ def history_for(ticker: str) -> dict:
         "newest": series[-1]["date"],
         "series": series,
     }
+
+
+# ---------------------------------------------------------------------------
+# On-demand AI overviews (separate from run_analysis)
+# ---------------------------------------------------------------------------
+def ai_top3_overview(as_of_date: date | None = None) -> dict:
+    """Generate the AI overview of the top-3 setups, on demand.
+
+    Recomputes the snapshots (cheap, from DB), selects the top-3, and asks
+    Claude for a critical review. Returns {status, text, model}.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"status": "no_key", "text": None, "model": None}
+
+    snapshots = build_snapshots(as_of_date=as_of_date)
+    if not snapshots:
+        return {"status": "error", "text": "No data in DB.", "model": None}
+
+    currencies = {t: s for t, s in snapshots.items() if s.category == "FX"}
+    assets     = {t: s for t, s in snapshots.items() if s.category != "FX"}
+    pairs = compute_all_pairs(currencies)
+    top = select_top_3_setups(pairs, assets, currencies)
+
+    if not top:
+        return {"status": "no_setups", "text": None, "model": None}
+
+    report_date = max(s.report_date for s in snapshots.values())
+    try:
+        prompt = _build_ai_prompt(top, report_date.isoformat(),
+                                  is_historical=(as_of_date is not None))
+        text = _call_anthropic_api(prompt, api_key)
+        if text:
+            return {"status": "ok", "text": text, "model": ANTHROPIC_MODEL}
+        return {"status": "error", "text": "Empty AI response.", "model": None}
+    except Exception as e:
+        return {"status": "error", "text": str(e), "model": None}
+
+
+def _build_asset_prompt(snap: AssetSnapshot, recent_history: list[dict],
+                        report_date: str, is_historical: bool = False) -> str:
+    """Build the prompt for a single-asset COT overview.
+
+    Structured so that adding external macro context later is just a matter
+    of appending another data block — the COT analysis stays self-contained.
+    """
+    import json as _json
+
+    # Compact recent net history (last ~13 weeks) for trend context
+    hist_compact = [
+        {"date": r["date"], "net": r["net"], "oi": r["open_interest"]}
+        for r in recent_history[-13:]
+    ]
+
+    bias, momentum, _ = classify_single_asset(snap)
+    data = {
+        "ticker": snap.ticker,
+        "name": snap.name,
+        "category": snap.category,
+        "report_date": report_date,
+        "current": {
+            "nc_long": snap.nc_long,
+            "nc_short": snap.nc_short,
+            "net": snap.net,
+            "net_pct_oi": round(snap.net_pct_oi, 2),
+            "open_interest": snap.open_interest,
+        },
+        "weekly_change": {
+            "long_chg": snap.nc_long_chg,
+            "short_chg": snap.nc_short_chg,
+            "net_chg": snap.net_chg,
+        },
+        "historical_context": {
+            "z26": round(snap.z26, 2) if snap.z26 is not None else None,
+            "z52": round(snap.z52, 2) if snap.z52 is not None else None,
+            "pct_rank_26w": round(snap.pct_rank_26w, 0) if snap.pct_rank_26w is not None else None,
+        },
+        "bias_label": bias,
+        "momentum_label": momentum,
+        "recent_net_history_13w": hist_compact,
+    }
+    data_json = _json.dumps(data, indent=2, ensure_ascii=False)
+
+    context_note = ""
+    if is_historical:
+        context_note = (
+            f"\n\n⚠ NOTA: Questo è un report STORICO al {report_date} (backtest). "
+            f"Analizza come se fossi a quella data, senza informazioni successive.\n"
+        )
+
+    return f"""Sei un analista esperto di posizionamento COT (Commitment of Traders) che assiste un trader prop swing. Stai facendo da sounding board critico, NON da advisor.{context_note}
+
+L'utente vuole un overview approfondito di UN SINGOLO strumento basato sui dati COT Non-Commercial (speculatori). Ecco i dati ufficiali CFTC al {report_date}:
+
+```json
+{data_json}
+```
+
+INTERPRETAZIONE Z-SCORE:
+- |z26| > 2.0  → ESTREMO statistico (top/bottom ~2.5% degli ultimi 6 mesi)
+- |z26| > 1.5  → stretched, attenzione a unwind
+- |z26| > 1.0  → posizionamento sopra la media
+- |z26| < 1.0  → nella norma
+
+Fornisci un overview di ~300 parole strutturato così:
+
+**{snap.name} — COT Overview**
+
+1. **Posizionamento attuale**: cosa dicono net e net%OI? Usa z26/z52 e il percentile rank per quantificare quanto è affollato/estremo il posizionamento rispetto alla storia recente. Sii preciso sui numeri.
+
+2. **Dinamica recente**: leggi la `recent_net_history_13w` e descrivi il trend delle ultime settimane. Il net sta crescendo, calando, invertendo? Il momentum settimanale (net_chg) conferma o contraddice il trend?
+
+3. **Open interest**: cosa segnala l'evoluzione dell'OI? OI in crescita + net in crescita = convinzione. OI in calo + net che si riduce = chiusura posizioni / disinteresse.
+
+4. **Rischi e scenari**: se il posizionamento è estremo, qual è il rischio di unwind? Quali sono i bias cognitivi tipici su questo strumento? Cosa cercheresti sul grafico prezzo per validare o invalidare la lettura COT?
+
+5. **Sintesi**: in 2-3 frasi, qual è il quadro COT complessivo di questo strumento adesso?
+
+Tono: diretto, professionale, critico. Niente disclaimer generici, niente "consulta un advisor". Devil's advocate da collega esperto. NON dare entry/stop/target.
+
+Nota: questo overview è basato SOLO sui dati COT. Non hai accesso a prezzi di mercato, notizie o dati macro live — non inventarli. Se un giudizio richiederebbe dati di prezzo che non hai, dillo esplicitamente.
+"""
+
+
+def ai_asset_overview(ticker: str, as_of_date: date | None = None) -> dict:
+    """Generate an AI overview of a single instrument's COT positioning.
+
+    COT-only for now. Designed so external macro context can be added later
+    without restructuring. Returns {status, text, model, ticker, name}.
+    """
+    ticker = ticker.upper()
+    if ticker not in INSTRUMENTS:
+        return {"status": "error", "text": f"Unknown instrument: {ticker}",
+                "model": None}
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"status": "no_key", "text": None, "model": None,
+                "ticker": ticker, "name": INSTRUMENTS[ticker].name}
+
+    snapshots = build_snapshots(as_of_date=as_of_date)
+    if ticker not in snapshots:
+        return {"status": "error",
+                "text": f"No data for {ticker} on or before the selected date.",
+                "model": None}
+
+    snap = snapshots[ticker]
+
+    # Recent history for trend context (respecting as_of_date if backtest)
+    if as_of_date is None:
+        rows = fetch_history(ticker, limit_weeks=13)
+    else:
+        rows = fetch_history_up_to(ticker, as_of_date, limit_weeks=13)
+    recent_history = [{
+        "date": r["report_date"].isoformat(),
+        "net": r["nc_long"] - r["nc_short"],
+        "open_interest": r["open_interest"],
+    } for r in rows]
+
+    report_date = snap.report_date.isoformat()
+    try:
+        prompt = _build_asset_prompt(snap, recent_history, report_date,
+                                     is_historical=(as_of_date is not None))
+        text = _call_anthropic_api(prompt, api_key)
+        if text:
+            return {"status": "ok", "text": text, "model": ANTHROPIC_MODEL,
+                    "ticker": ticker, "name": snap.name}
+        return {"status": "error", "text": "Empty AI response.", "model": None}
+    except Exception as e:
+        return {"status": "error", "text": str(e), "model": None}

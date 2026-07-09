@@ -25,7 +25,8 @@ import threading
 import uuid
 from flask import Flask, jsonify, render_template, request, abort
 
-from core import run_analysis, history_for
+from core import (run_analysis, history_for,
+                  ai_top3_overview, ai_asset_overview)
 from db import available_report_dates
 from instruments import INSTRUMENTS
 from datetime import date as _date
@@ -42,14 +43,13 @@ _jobs_lock = threading.Lock()
 # Background job runner (kept for compatibility with the polling frontend;
 # the analysis itself is now nearly instant)
 # ---------------------------------------------------------------------------
-def _run_job(job_id: str, run_ai: bool, as_of_date: _date | None) -> None:
+def _run_job(job_id: str, as_of_date: _date | None) -> None:
     def progress(msg: str) -> None:
         with _jobs_lock:
             if job_id in _jobs:
                 _jobs[job_id]["status_msg"] = msg
     try:
-        result = run_analysis(progress=progress, run_ai=run_ai,
-                              as_of_date=as_of_date)
+        result = run_analysis(progress=progress, as_of_date=as_of_date)
         with _jobs_lock:
             _jobs[job_id]["state"] = "done"
             _jobs[job_id]["result"] = result
@@ -84,11 +84,9 @@ def api_report_dates():
 
 @app.route("/run", methods=["POST"])
 def run():
-    run_ai = True
     as_of_date: _date | None = None
     if request.is_json:
         body = request.json or {}
-        run_ai = body.get("run_ai", True)
         date_str = body.get("report_date")
         if date_str:
             try:
@@ -106,9 +104,49 @@ def run():
                          "status_msg": "Starting...",
                          "result": None}
     t = threading.Thread(target=_run_job,
-                         args=(job_id, run_ai, as_of_date), daemon=True)
+                         args=(job_id, as_of_date), daemon=True)
     t.start()
     return jsonify({"job_id": job_id})
+
+
+def _parse_as_of(body: dict) -> _date | None:
+    """Helper: extract optional report_date from a request body."""
+    date_str = body.get("report_date")
+    if not date_str:
+        return None
+    try:
+        return _date.fromisoformat(date_str)
+    except ValueError:
+        return None
+
+
+@app.route("/ai/top3", methods=["POST"])
+def ai_top3():
+    """On-demand AI overview of the top-3 setups."""
+    body = request.json or {}
+    as_of_date = _parse_as_of(body)
+    try:
+        result = ai_top3_overview(as_of_date=as_of_date)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "text": str(e), "model": None}), 500
+
+
+@app.route("/ai/asset", methods=["POST"])
+def ai_asset():
+    """On-demand AI overview of a single instrument's COT positioning."""
+    body = request.json or {}
+    ticker = (body.get("ticker") or "").upper()
+    if not ticker or ticker not in INSTRUMENTS:
+        return jsonify({"status": "error",
+                        "text": f"Unknown or missing ticker: {ticker}",
+                        "model": None}), 400
+    as_of_date = _parse_as_of(body)
+    try:
+        result = ai_asset_overview(ticker, as_of_date=as_of_date)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "text": str(e), "model": None}), 500
 
 
 @app.route("/status/<job_id>")
