@@ -26,9 +26,9 @@ not a signal generator.
 
 ```
 ┌───────────────────┐    ┌────────────────────┐    ┌──────────────────┐
-│  CFTC API         │──▶ │  batch.py          │──▶ │  PostgreSQL      │
-│  (Socrata, free)  │    │  Railway cron      │    │  cot_weekly      │
-└───────────────────┘    │  (Sat 09:00 UTC)   │    └────────┬─────────┘
+│  CFTC API         │──▶ │  sync.py           │──▶ │  PostgreSQL      │
+│  (Socrata, free)  │    │  manual SYNC button│    │  cot_weekly      │
+└───────────────────┘    │  (or python sync.py)│   └────────┬─────────┘
                          └────────────────────┘             │
                                                             ▼ (millisecond reads)
                                                    ┌──────────────────┐
@@ -40,7 +40,9 @@ not a signal generator.
 - **Single source**: official CFTC Public Reporting API (Socrata). No scraping.
 - **Persistent storage**: PostgreSQL accumulates the weekly history forever.
 - **Web reads from DB**: clicking "Run Analysis" is instant — no API calls.
-- **Idempotent batch**: re-runs are safe, upserts never duplicate.
+- **Manual sync**: the **SYNC** button first checks whether the DB is already
+  up to date (no API call) and hits the CFTC API only when it's stale.
+- **Idempotent sync**: re-runs are safe, upserts never duplicate.
 
 ---
 
@@ -85,23 +87,28 @@ set DATABASE_URL=postgresql://user:pass@host:5432/dbname
 $env:DATABASE_URL='postgresql://user:pass@host:5432/dbname'
 ```
 
-### 3. Populate the database
-
-The first run downloads 2 years of history for every instrument (~30 seconds):
-
-```bash
-python batch.py
-```
-
-Subsequent runs are incremental — only new reports are fetched.
-
-### 4. Launch the web app
+### 3. Launch the web app
 
 ```bash
 python app.py
 ```
 
-Open <http://localhost:5000> and click **RUN ANALYSIS**.
+Open <http://localhost:5000>.
+
+### 4. Populate the database
+
+Click the **⟳ SYNC** button in the header. The first sync downloads 2 years
+of history for every instrument (~30 seconds); afterwards it's incremental —
+SYNC first checks whether the DB is already up to date and only calls the
+CFTC API when new reports exist.
+
+You can also populate from the CLI (handy for a first backfill or a cron):
+
+```bash
+python sync.py
+```
+
+Then click **RUN ANALYSIS**.
 
 ### Optional: enable AI review
 
@@ -114,17 +121,19 @@ normally.
 
 ---
 
-## Batch usage
+## Data sync
+
+The primary way to sync is the **⟳ SYNC** button in the web UI. The same
+logic is also available from the CLI:
 
 ```bash
-python batch.py                       # incremental (run after every weekly CFTC release)
-python batch.py --backfill            # force re-download of 2 years for all instruments
-python batch.py --instrument GC       # only one instrument (useful for debugging)
-python batch.py --instrument ZB --backfill   # backfill a newly added instrument
+python sync.py                       # incremental (run after every weekly CFTC release)
+python sync.py --backfill            # force re-download of 2 years for all instruments
+python sync.py --instrument GC       # only one instrument (useful for debugging)
+python sync.py --instrument ZB --backfill   # backfill a newly added instrument
 ```
 
 Exit codes: `0` = success, `1` = partial failure, `2` = bad arguments.
-Railway's cron dashboard surfaces failures clearly.
 
 ---
 
@@ -135,7 +144,7 @@ cot_v5/
 ├── instruments.py        ← Single source of truth for the 32 instruments
 ├── db.py                 ← PostgreSQL layer (schema, upserts, queries)
 ├── cftc_client.py        ← CFTC API client (handles the '+' in S&P codes)
-├── batch.py              ← Weekly orchestrator (CFTC → DB)
+├── sync.py               ← Manual sync + freshness check (CFTC → DB)
 ├── core.py               ← Analysis: snapshots, z-scores, top-3, AI prompt
 ├── app.py                ← Flask web app
 ├── templates/
@@ -146,7 +155,7 @@ cot_v5/
 ├── Procfile              ← Heroku/Railway start command
 ├── gunicorn.conf.py      ← Production server config
 ├── railway.json          ← Railway web service config
-├── railway-cron.json     ← Railway cron service config (Sat 09:00 UTC)
+├── railway-cron.json     ← Optional Railway cron config (runs python sync.py)
 └── DEPLOY.md             ← Step-by-step Railway deployment guide
 ```
 
@@ -161,15 +170,19 @@ Full step-by-step instructions in **[DEPLOY.md](DEPLOY.md)**. Summary:
 3. Create a **web service** from the GitHub repo
    - reference `DATABASE_URL` from Postgres
    - generate public domain
-4. Create a **cron service** from the same repo
-   - start command: `python batch.py`
-   - cron schedule: `0 9 * * 6` (Saturday 09:00 UTC)
-   - restart policy: Never
-   - same `DATABASE_URL` reference
 
-After deploy, every Saturday morning the cron pulls fresh CFTC data and the
-web app shows the new positioning automatically on the next "Run Analysis"
-click.
+After deploy, open the app and hit the **⟳ SYNC** button to populate the DB
+and to pull fresh CFTC data whenever a new report is out.
+
+### Optional: automated weekly sync
+
+If you'd rather not click SYNC manually, add a **cron service** from the same
+repo using [railway-cron.json](railway-cron.json):
+
+- start command: `python sync.py`
+- cron schedule: `0 9 * * 6` (Saturday 09:00 UTC)
+- restart policy: Never
+- same `DATABASE_URL` reference
 
 ---
 
@@ -204,7 +217,7 @@ is at a statistical extreme.
 |---|---|---|
 | Railway Postgres | <100 MB | Free tier |
 | Railway Web | ~50 MB RAM idle | Free tier |
-| Railway Cron | ~60 s/week | Almost zero |
+| Railway Cron (optional) | ~60 s/week | Almost zero |
 | Anthropic AI review (Claude Sonnet 4.6) | ~3000 tokens/run | ~$0.04 per run, ~$2/year if weekly |
 
 ---
