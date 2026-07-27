@@ -98,6 +98,25 @@
   }
   button#run:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  /* Sync button + freshness indicator */
+  .sync-wrap { display: flex; flex-direction: column; gap: 4px; }
+  button#sync {
+    font-family: 'JetBrains Mono', monospace; font-weight: 700;
+    font-size: 12px; letter-spacing: 0.04em;
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); padding: 10px 16px; cursor: pointer;
+    transition: border-color 0.2s, opacity 0.2s;
+  }
+  button#sync:hover:not(:disabled) { border-color: var(--accent); }
+  button#sync:disabled { opacity: 0.5; cursor: wait; }
+  .sync-status {
+    font-size: 10px; letter-spacing: 0.04em; color: var(--dim);
+    min-height: 12px; padding-left: 2px;
+  }
+  .sync-status.fresh { color: var(--green); }
+  .sync-status.stale { color: var(--accent); }
+  .sync-status.err   { color: var(--red); }
+
   main { padding: 28px 32px; max-width: 1280px; margin: 0 auto; }
 
   #progress {
@@ -367,6 +386,10 @@
     <p>NON-COMMERCIAL · LEGACY FUTURES · OFFICIAL CFTC DATA</p>
   </div>
   <div class="controls">
+    <div class="sync-wrap">
+      <button id="sync" title="Check for new CFTC data and download it if the DB is stale">⟳ SYNC</button>
+      <span id="syncStatus" class="sync-status">checking…</span>
+    </div>
     <div class="date-picker">
       <label for="reportDate">Report date</label>
       <select id="reportDate" disabled>
@@ -517,6 +540,99 @@ async function loadReportDates() {
   }
 }
 loadReportDates();
+
+// ===== Data sync =====
+const syncBtn = $('#sync');
+const syncStatus = $('#syncStatus');
+let syncPolling = null;
+
+function setSyncStatus(text, cls) {
+  syncStatus.textContent = text;
+  syncStatus.className = 'sync-status' + (cls ? ' ' + cls : '');
+}
+
+// Freshness check on load (no CFTC API call server-side)
+async function refreshSyncStatus() {
+  try {
+    const r = await fetch('/api/data-status');
+    const d = await r.json();
+    if (!d.ok) { setSyncStatus('status unavailable', 'err'); return; }
+    if (d.syncing) { startSyncPolling(); return; }
+    if (d.current) setSyncStatus('up to date · ' + (d.newest || '—'), 'fresh');
+    else setSyncStatus('stale · newest ' + (d.newest || 'none') + ' < ' + d.expected, 'stale');
+  } catch (e) {
+    setSyncStatus('status unavailable', 'err');
+  }
+}
+refreshSyncStatus();
+
+syncBtn.addEventListener('click', async () => {
+  syncBtn.disabled = true;
+  syncBtn.textContent = '⏳ SYNCING…';
+  setSyncStatus('checking for new data…');
+  try {
+    const res = await fetch('/api/sync', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    const d = await res.json();
+    if (!d.ok) {
+      setSyncStatus(d.error || 'sync failed', 'err');
+      finishSync();
+      return;
+    }
+    if (d.state === 'skipped') {
+      setSyncStatus('already up to date · ' + (d.newest || '—'), 'fresh');
+      finishSync();
+      return;
+    }
+    // state === 'running' → poll until done
+    startSyncPolling();
+  } catch (e) {
+    setSyncStatus('sync failed: ' + e.message, 'err');
+    finishSync();
+  }
+});
+
+function startSyncPolling() {
+  syncBtn.disabled = true;
+  syncBtn.textContent = '⏳ SYNCING…';
+  if (syncPolling) clearInterval(syncPolling);
+  syncPolling = setInterval(async () => {
+    try {
+      const r = await fetch('/api/sync/status');
+      const d = await r.json();
+      if (d.state === 'running') {
+        setSyncStatus(d.status_msg || 'syncing…');
+        return;
+      }
+      clearInterval(syncPolling);
+      syncPolling = null;
+      const res = d.result || {};
+      if (d.state === 'error' || res.ok === false) {
+        setSyncStatus('sync failed: ' + (res.error || 'unknown'), 'err');
+      } else {
+        const errs = (res.errors && res.errors.length) ? ` · ${res.errors.length} errors` : '';
+        setSyncStatus(`done · +${res.new_rows} rows · newest ${res.newest || '—'}${errs}`,
+                      errs ? 'stale' : 'fresh');
+        // New data may mean new report dates — refresh the dropdown.
+        loadReportDates();
+      }
+      finishSync();
+    } catch (e) {
+      clearInterval(syncPolling);
+      syncPolling = null;
+      setSyncStatus('sync status error: ' + e.message, 'err');
+      finishSync();
+    }
+  }, 1000);
+}
+
+function finishSync() {
+  syncBtn.disabled = false;
+  syncBtn.textContent = '⟳ SYNC';
+}
 
 // ===== Run analysis =====
 runBtn.addEventListener('click', startRun);

@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "python batch.py",
+    "startCommand": "python sync.py",
     "cronSchedule": "0 9 * * 6",
     "restartPolicyType": "NEVER",
     "numReplicas": 1,

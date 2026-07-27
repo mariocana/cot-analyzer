@@ -506,7 +506,7 @@ def run_analysis(progress=None, as_of_date: date | None = None) -> dict:
     if not snapshots:
         return {
             "ok": False,
-            "error": ("No data in DB. Run `python batch.py` first to populate "
+            "error": ("No data in DB. Hit the SYNC button first to populate "
                       "the database from the CFTC API.") if as_of_date is None
                      else f"No data available on or before {as_of_date}.",
         }
@@ -592,7 +592,7 @@ def history_for(ticker: str) -> dict:
     if not rows:
         return {
             "ok": False,
-            "error": f"No data in DB for {ticker}. Run the batch first.",
+            "error": f"No data in DB for {ticker}. Hit the SYNC button first.",
         }
 
     series = [{

@@ -1,8 +1,8 @@
 """
 app.py — Flask web interface (Phase 3, DB-backed)
 ==================================================
-Reads everything from the local PostgreSQL DB (populated by batch.py).
-No more live scraping.
+Reads everything from the local PostgreSQL DB. Data is populated on demand
+via the SYNC button (see sync.py) — no cron/batch and no live scraping.
 
 Routes:
   GET  /                       → main analysis page
@@ -11,6 +11,9 @@ Routes:
                                   compatibility with the existing frontend
   GET  /status/<job_id>        → job progress
   GET  /result/<job_id>        → JSON result
+  GET  /api/data-status        → cheap DB freshness check (no CFTC call)
+  POST /api/sync               → start a manual data sync (CFTC → DB)
+  GET  /api/sync/status        → poll the running/last sync
   GET  /history/<ticker>       → historical chart page for one instrument
   GET  /api/history/<ticker>   → raw JSON for chart consumption
   GET  /health                 → health check
@@ -29,6 +32,7 @@ from core import (run_analysis, history_for,
                   ai_top3_overview, ai_asset_overview)
 from db import available_report_dates
 from instruments import INSTRUMENTS
+from sync import data_status, run_sync
 from datetime import date as _date
 
 
@@ -37,6 +41,11 @@ app = Flask(__name__)
 # In-memory job store (single-worker only — see gunicorn.conf.py)
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+
+# Separate store + lock for the (long-running) data sync job. Only one sync
+# may run at a time.
+_sync_job: dict = {"state": "idle", "status_msg": "", "result": None}
+_sync_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +89,88 @@ def api_report_dates():
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Data sync (manual, replaces the old batch.py cron)
+# ---------------------------------------------------------------------------
+def _run_sync_job(force_backfill: bool) -> None:
+    def progress(msg: str) -> None:
+        with _sync_lock:
+            _sync_job["status_msg"] = msg
+    try:
+        result = run_sync(force_backfill=force_backfill, progress=progress)
+        with _sync_lock:
+            _sync_job["state"] = "done"
+            _sync_job["status_msg"] = "Sync complete"
+            _sync_job["result"] = result
+    except Exception as e:
+        with _sync_lock:
+            _sync_job["state"] = "error"
+            _sync_job["status_msg"] = "Sync failed"
+            _sync_job["result"] = {"ok": False, "error": str(e)}
+
+
+@app.route("/api/data-status")
+def api_data_status():
+    """Cheap freshness check (no CFTC API call). Also reports whether a sync
+    is currently running so the UI can restore its state on reload."""
+    try:
+        status = data_status()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    with _sync_lock:
+        status["syncing"] = _sync_job["state"] == "running"
+    status["ok"] = True
+    return jsonify(status)
+
+
+@app.route("/api/sync", methods=["POST"])
+def api_sync():
+    """Start a data sync in the background.
+
+    By default it first checks whether the DB is already up to date and skips
+    the CFTC API entirely if so. Pass {"force": true} to fetch regardless (and
+    {"backfill": true} to re-download two years)."""
+    body = request.json or {} if request.is_json else {}
+    force = bool(body.get("force"))
+    backfill = bool(body.get("backfill"))
+
+    with _sync_lock:
+        if _sync_job["state"] == "running":
+            return jsonify({"ok": False, "error": "A sync is already running",
+                            "state": "running"}), 409
+
+    # Cheap up-to-date check — avoid hitting the CFTC API when not needed.
+    if not force and not backfill:
+        try:
+            status = data_status()
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        if status["current"]:
+            return jsonify({"ok": True, "state": "skipped",
+                            "reason": "already up to date",
+                            "newest": status["newest"],
+                            "expected": status["expected"]})
+
+    with _sync_lock:
+        _sync_job.update({"state": "running",
+                          "status_msg": "Starting sync…",
+                          "result": None})
+    t = threading.Thread(target=_run_sync_job, args=(backfill,), daemon=True)
+    t.start()
+    return jsonify({"ok": True, "state": "running"})
+
+
+@app.route("/api/sync/status")
+def api_sync_status():
+    """Poll the running/last sync job."""
+    with _sync_lock:
+        return jsonify({
+            "state": _sync_job["state"],
+            "status_msg": _sync_job["status_msg"],
+            "result": _sync_job["result"],
+        })
 
 
 @app.route("/run", methods=["POST"])
